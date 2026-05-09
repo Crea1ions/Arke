@@ -1,0 +1,14 @@
+[shell]
+# Strict whitelist v0.2 — only these commands are permitted.
+# To add a command: document the decision in Arke-DECISION.md first.
+allowed_commands = [
+    "echo", "cat", "grep", "find", "ls", "head", "tail",
+    "wc", "sort", "uniq", "awk", "sed", "cut", "tr",
+    "mogrify", "convert", "ffmpeg",
+    "git", "python", "python3",
+    "curl", "wget", "jq",
+    "date", "touch", "rm", "mkdir", "cp", "mv"
+]
+
+# Set to true to disable the whitelist (dangerous — dev only)
+unsafe_mode = false

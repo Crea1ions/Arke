@@ -1,0 +1,23 @@
+[models.mistral]
+provider           = "mistral"
+model              = "mistral/mistral-large-latest"
+cost_per_1k_input  = 0.00014
+cost_per_1k_output = 0.00042
+max_tokens         = 2048
+
+[models.gemini_flash]
+provider           = "gemini"
+model              = "gemini/gemini-2.5-flash"
+cost_per_1k_input  = 0.0001
+cost_per_1k_output = 0.0004
+max_tokens         = 2048
+
+[models.openrouter]
+provider           = "openrouter"
+model              = "openrouter/mistralai/mistral-large"
+cost_per_1k_input  = 0.00027
+cost_per_1k_output = 0.00081
+max_tokens         = 2048
+
+[fallback]
+order = ["mistral", "gemini_flash", "openrouter"]

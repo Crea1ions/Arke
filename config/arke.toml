@@ -1,0 +1,80 @@
+[memory]
+global_path        = "memory/global.db"
+project_path       = "memory/project.db"
+session_path       = "memory/session.db"
+cache_path         = "memory/cache.db"
+wal_mode           = true
+archive_after_days = 30
+
+[routing]
+# Deterministic hierarchy — immutable until v0.2
+layers = ["cli", "fs", "sqlite", "script", "api", "mcp", "llm"]
+
+[telegram]
+token      = "${TELEGRAM_TOKEN}"
+local_only = false
+
+[logging]
+format = "json"
+level  = "info"
+
+[mcp]
+# ContextForge federated MCP endpoint (JSON-RPC 2.0 over HTTP)
+# Set via env var CONTEXTFORGE_URL to override at runtime.
+base_url       = "http://localhost:3000/mcp"
+timeout_sec    = 5
+enabled        = true
+
+[cache]
+# LLM response cache TTL in hours (0 = no expiry)
+ttl_hours = 24
+
+[vector]
+# Semantic search via sqlite-vec + Gemini embeddings
+# Set enabled = false on low-memory machines to use FTS5 only
+enabled    = true
+model      = "gemini/text-embedding-004"
+dimensions = 768
+
+[telemetry]
+# OpenTelemetry distributed tracing + optional Prometheus metrics.
+# Set enabled = true to emit spans; set otlp_endpoint to export to Jaeger/Zipkin.
+enabled       = false
+otlp_endpoint = ""       # e.g. "http://localhost:4318/v1/traces"
+prometheus    = false    # requires: pip install opentelemetry-exporter-prometheus
+
+[sandbox]
+# Wrap shell commands with bubblewrap for read-only filesystem isolation.
+# Falls back to unsandboxed execution (with a warning) when bwrap is absent.
+enabled = true
+
+[agent]
+# Identité et contexte injecté dans chaque appel LLM conversationnel.
+name    = "Arke"
+version = "0.3"
+# Le prompt système est complété dynamiquement avec les stats live (skills, mémoire, etc.)
+system_prompt = """
+Tu es Arke, un agent cognitif autonome local-first.
+
+## Ton architecture réelle
+- Routeur déterministe : chaque intention est analysée → cli / fs / sqlite / mcp / llm
+- 4 bases SQLite persistantes : global.db (skills, usage), project.db (documents, FTS5), session.db (historique chat, tâches), cache.db (réponses LLM)
+- Skills auto-appris : tu détectes les patterns répétitifs et crées des skills réutilisables
+- Sandbox bubblewrap : toutes les commandes shell s'exécutent en lecture seule sur /
+- Observabilité : chaque étape est tracée via OpenTelemetry
+
+## Ta mémoire persistante
+- Historique de conversation : session.db → table chat_history (persiste entre sessions)
+- Notes utilisateur : session.db → session_context (clé chat_notes)
+- Skills et usage : global.db → conservés indéfiniment jusqu'au pruning
+
+## Tes capacités concrètes
+- Exécuter des commandes shell dans le sandbox (grep, cat, git, python, curl…)
+- Lire et écrire des fichiers sur le système
+- Requêtes SQLite sur tes 4 bases de mémoire
+- Appels LLM via litellm (Gemini Flash, Claude, Mistral, Ollama local)
+- Intégrations MCP (GitHub, Slack, ContextForge)
+- Recherche sémantique vectorielle (sqlite-vec + embeddings Gemini)
+
+Réponds en français, de façon concise. Pour les tâches techniques, propose une action concrète et exécute-la si l'utilisateur confirme.
+"""
