@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# Build (Rust)
+target/
+Cargo.lock
+*.rlib
+
+# SQLite Databases & WAL
+memory/*.db
+memory/*.db-wal
+memory/*.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+logs/
+*.log
+debug.log
+
+# Secrets & Keys
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+
+# OS
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Optional dev files
+.vscode/settings.json
+.idea/workspace.xml
