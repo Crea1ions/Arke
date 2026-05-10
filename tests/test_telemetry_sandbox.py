@@ -282,7 +282,195 @@ def test_sandboxed_run_with_bwrap():
 
 
 # ---------------------------------------------------------------------------
-# E2E — orchestrator + telemetry integration
+# Workspace isolation -- new tests (Session 019)
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_workspace_creates_dirs(tmp_path, monkeypatch):
+    """_ensure_workspace() creates workspace/input/output directories."""
+    import arke.sandbox as sb
+
+    fake_workspace = tmp_path / "arke-agent-workspace"
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    sb._ensure_workspace()
+
+    assert fake_workspace.is_dir()
+    assert (fake_workspace / "input").is_dir()
+    assert (fake_workspace / "output").is_dir()
+
+
+def test_ensure_workspace_idempotent(tmp_path, monkeypatch):
+    """_ensure_workspace() can be called multiple times without error."""
+    import arke.sandbox as sb
+
+    fake_workspace = tmp_path / "arke-agent-workspace"
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    sb._ensure_workspace()
+    sb._ensure_workspace()  # must not raise
+
+
+def test_build_workspace_argv_contains_workspace_bind(tmp_path, monkeypatch):
+    """_build_workspace_argv() includes --bind for AGENT_WORKSPACE."""
+    import arke.sandbox as sb
+
+    fake_workspace = tmp_path / "ws"
+    fake_workspace.mkdir()
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    argv = sb._build_workspace_argv("echo hi", [])
+
+    assert "--bind" in argv
+    bind_idx = argv.index("--bind")
+    assert argv[bind_idx + 1] == str(fake_workspace)
+    assert argv[bind_idx + 2] == "/workspace"
+
+
+def test_build_workspace_argv_no_ro_bind_slash(tmp_path, monkeypatch):
+    """_build_workspace_argv() must NOT mount / (host root) read-only."""
+    import arke.sandbox as sb
+
+    fake_workspace = tmp_path / "ws"
+    fake_workspace.mkdir()
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    argv = sb._build_workspace_argv("echo hi", [])
+    flat = " ".join(argv)
+
+    # "--ro-bind / /" must not appear
+    assert "--ro-bind / /" not in flat
+    # The first positional arg after "--ro-bind" must never be "/"
+    for i, arg in enumerate(argv):
+        if arg == "--ro-bind" and i + 1 < len(argv):
+            assert argv[i + 1] != "/", f"ro-bind / found at index {i+1}"
+
+
+def test_build_workspace_argv_unshare_net():
+    """_build_workspace_argv() must include --unshare-net (no network)."""
+    import arke.sandbox as sb
+
+    argv = sb._build_workspace_argv("echo hi", [])
+    assert "--unshare-net" in argv
+
+
+def test_build_workspace_argv_allowed_dirs_added(tmp_path, monkeypatch):
+    """User-allowed directories are appended as --ro-bind entries."""
+    import arke.sandbox as sb
+
+    fake_workspace = tmp_path / "ws"
+    fake_workspace.mkdir()
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    extra_dir = tmp_path / "projets"
+    extra_dir.mkdir()
+
+    allowed = [{"path": str(extra_dir), "read_only": True}]
+    argv = sb._build_workspace_argv("echo hi", allowed)
+
+    assert "--ro-bind" in argv
+    assert str(extra_dir) in argv
+
+
+def test_build_workspace_argv_blocks_home_root(tmp_path, monkeypatch):
+    """Home root must be blocked even if listed in allowed_dirs."""
+    import arke.sandbox as sb
+    from pathlib import Path
+
+    fake_workspace = tmp_path / "ws"
+    fake_workspace.mkdir()
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    home = str(Path.home())
+    allowed = [{"path": home}]
+    argv = sb._build_workspace_argv("echo hi", allowed)
+
+    # home root must NOT appear as a --ro-bind source
+    for i, arg in enumerate(argv):
+        if arg == "--ro-bind" and i + 1 < len(argv):
+            assert argv[i + 1] != home, f"home root exposed at index {i+1}"
+
+
+def test_build_workspace_argv_blocks_root(tmp_path, monkeypatch):
+    """Filesystem root (/) must be blocked even if listed in allowed_dirs."""
+    import arke.sandbox as sb
+
+    fake_workspace = tmp_path / "ws"
+    fake_workspace.mkdir()
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+
+    allowed = [{"path": "/"}]
+    argv = sb._build_workspace_argv("echo hi", allowed)
+
+    for i, arg in enumerate(argv):
+        if arg == "--ro-bind" and i + 1 < len(argv):
+            assert argv[i + 1] != "/", f"/ exposed at index {i+1}"
+
+
+def test_build_full_argv_mounts_root():
+    """_build_full_argv() (legacy mode) still mounts / read-only."""
+    import arke.sandbox as sb
+
+    argv = sb._build_full_argv("echo hi")
+    assert "--ro-bind" in argv
+    idx = argv.index("--ro-bind")
+    assert argv[idx + 1] == "/"
+    assert argv[idx + 2] == "/"
+
+
+def test_load_allowed_dirs_empty_when_no_section(tmp_path, monkeypatch):
+    """_load_allowed_dirs() returns [] when [workspace] section is absent."""
+    import arke.sandbox as sb
+
+    (tmp_path / "security.toml").write_bytes(b"[shell]\nunsafe_mode = false\n")
+    monkeypatch.setattr(sb, "_SECURITY_PATH", tmp_path / "security.toml")
+
+    result = sb._load_allowed_dirs()
+    assert result == []
+
+
+def test_load_allowed_dirs_parses_entries(tmp_path, monkeypatch):
+    """_load_allowed_dirs() correctly parses [[workspace.allowed_dirs]]."""
+    import arke.sandbox as sb
+
+    toml = (
+        b"[workspace]\n"
+        b"path = '~/arke-agent-workspace'\n"
+        b"[[workspace.allowed_dirs]]\n"
+        b"path = '/home/devdipper/projets'\n"
+        b"read_only = true\n"
+    )
+    (tmp_path / "security.toml").write_bytes(toml)
+    monkeypatch.setattr(sb, "_SECURITY_PATH", tmp_path / "security.toml")
+
+    result = sb._load_allowed_dirs()
+    assert len(result) == 1
+    assert result[0]["path"] == "/home/devdipper/projets"
+    assert result[0]["read_only"] is True
+
+
+def test_sandboxed_run_workspace_mode_with_bwrap(tmp_path, monkeypatch):
+    """workspace mode: bwrap runs command in /workspace, not host root."""
+    import shutil
+    import arke.sandbox as sb
+
+    if not shutil.which("bwrap"):
+        pytest.skip("bwrap not installed on this machine")
+
+    fake_workspace = tmp_path / "ws"
+    monkeypatch.setattr(sb, "AGENT_WORKSPACE", fake_workspace)
+    monkeypatch.setattr(sb, "_CONFIG_PATH", tmp_path / "arke.toml")
+    (tmp_path / "arke.toml").write_bytes(b"[sandbox]\nenabled = true\nmode = 'workspace'\n")
+    monkeypatch.setattr(sb, "_SECURITY_PATH", tmp_path / "security.toml")
+    (tmp_path / "security.toml").write_bytes(b"[workspace]\npath = '~/arke-agent-workspace'\n")
+
+    result = sb.sandboxed_run("echo sandbox-ws-ok", sandbox_enabled=True)
+    assert result["return_code"] == 0
+    assert "sandbox-ws-ok" in result["stdout"]
+
+
+# ---------------------------------------------------------------------------
+# E2E -- orchestrator + telemetry integration
 # ---------------------------------------------------------------------------
 
 

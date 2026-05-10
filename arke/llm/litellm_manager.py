@@ -10,6 +10,7 @@ Cost and token usage are logged as structured JSON on every call.
 from __future__ import annotations
 
 import os
+import signal
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ import structlog
 log = structlog.get_logger()
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "models.toml"
+_LLM_TIMEOUT_SECONDS = 60  # Timeout for LLM API calls (prevents infinite hangs)
 
 
 def _load_config() -> dict[str, Any]:
@@ -135,6 +137,7 @@ class LiteLLMManager:
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
+            "timeout": _LLM_TIMEOUT_SECONDS,  # Add timeout to prevent infinite hangs
         }
         if base_url:
             kwargs["base_url"] = base_url
@@ -153,7 +156,20 @@ class LiteLLMManager:
             if api_key:
                 kwargs["api_key"] = api_key
 
-        response = litellm.completion(**kwargs)  # type: ignore[attr-defined]
+        try:
+            response = litellm.completion(**kwargs)  # type: ignore[attr-defined]
+        except Exception as exc:
+            # Re-raise with clear timeout error message
+            if "timeout" in str(exc).lower():
+                log.error(
+                    "llm.timeout",
+                    provider=provider_key,
+                    timeout_seconds=_LLM_TIMEOUT_SECONDS,
+                )
+                raise TimeoutError(
+                    f"LLM provider '{provider_key}' did not respond within {_LLM_TIMEOUT_SECONDS}s"
+                ) from exc
+            raise
 
         content: str = response.choices[0].message.content or ""
         input_tokens: int = response.usage.prompt_tokens if response.usage else 0
@@ -238,6 +254,7 @@ class LiteLLMManager:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "stream": True,  # Enable streaming
+            "timeout": _LLM_TIMEOUT_SECONDS,  # Add timeout to prevent infinite hangs
         }
         if base_url:
             kwargs["base_url"] = base_url
@@ -256,7 +273,20 @@ class LiteLLMManager:
             if api_key:
                 kwargs["api_key"] = api_key
 
-        response = litellm.completion(**kwargs)  # type: ignore[attr-defined]
+        try:
+            response = litellm.completion(**kwargs)  # type: ignore[attr-defined]
+        except Exception as exc:
+            # Re-raise with clear timeout error message
+            if "timeout" in str(exc).lower():
+                log.error(
+                    "llm.stream_timeout",
+                    provider=provider_key,
+                    timeout_seconds=_LLM_TIMEOUT_SECONDS,
+                )
+                raise TimeoutError(
+                    f"LLM provider '{provider_key}' did not respond within {_LLM_TIMEOUT_SECONDS}s"
+                ) from exc
+            raise
 
         # Iterate through streaming chunks
         for chunk in response:

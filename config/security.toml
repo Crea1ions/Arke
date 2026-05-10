@@ -1,5 +1,5 @@
 [shell]
-# Strict whitelist v0.2 — only these commands are permitted.
+# Strict whitelist v0.2 -- only these commands are permitted.
 # To add a command: document the decision in Arke-DECISION.md first.
 allowed_commands = [
     "echo", "cat", "grep", "find", "ls", "head", "tail",
@@ -10,5 +10,22 @@ allowed_commands = [
     "date", "touch", "rm", "mkdir", "cp", "mv"
 ]
 
-# Set to true to disable the whitelist (dangerous — dev only)
+# Set to true to disable the whitelist (dangerous -- dev only)
 unsafe_mode = false
+
+[workspace]
+# Path of the agent's dedicated writable workspace (used in sandbox mode = "workspace").
+path = "~/arke-agent-workspace"
+
+# Additional host directories to mount read-only inside the workspace sandbox.
+# The agent will see them at their original host path inside the container.
+# Safety: "/" and "~" (home root) are blocked regardless of what is listed here.
+#
+# Example:
+# [[workspace.allowed_dirs]]
+# path = "/home/devdipper/projets"
+# read_only = true
+#
+# [[workspace.allowed_dirs]]
+# path = "/home/devdipper/docs"
+# read_only = true

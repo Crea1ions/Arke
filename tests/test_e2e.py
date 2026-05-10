@@ -44,7 +44,8 @@ def _mock_llm_complete(prompt: str, task_type: str = "reasoning", max_tokens: in
 # ---------------------------------------------------------------------------
 
 
-def test_nginx_log_analysis():
+@patch("arke.sandbox.load_sandbox_config", return_value={"mode": "full", "enabled": True})
+def test_nginx_log_analysis(_mock_cfg):
     """
     Test de vérité Phase 1 — Pierre de touche du noyau Arke.
 
@@ -56,6 +57,10 @@ def test_nginx_log_analysis():
     NEW ARCHITECTURE: Router now returns only CLI (grep) step.
     LLM summarization is handled by agent via _ask_agent() in chat.py.
     This test validates that the CLI grep step works correctly.
+
+    Sandbox mode is forced to "full" here so that the relative fixture path
+    resolves correctly. The sandbox behaviour is tested in
+    test_telemetry_sandbox.py.
     """
     result = orchestrator.run(
         "analyse les logs nginx et résume les erreurs critiques",

@@ -39,14 +39,20 @@ dimensions = 768
 [telemetry]
 # OpenTelemetry distributed tracing + optional Prometheus metrics.
 # Set enabled = true to emit spans; set otlp_endpoint to export to Jaeger/Zipkin.
-enabled       = false
+enabled       = true
 otlp_endpoint = ""       # e.g. "http://localhost:4318/v1/traces"
 prometheus    = false    # requires: pip install opentelemetry-exporter-prometheus
 
 [sandbox]
-# Wrap shell commands with bubblewrap for read-only filesystem isolation.
+# Wrap shell commands with bubblewrap for filesystem isolation.
 # Falls back to unsandboxed execution (with a warning) when bwrap is absent.
 enabled = true
+# Isolation mode:
+#   "workspace" (recommended) -- agent confined to ~/arke-agent-workspace only
+#   "full"      (legacy)      -- host root mounted read-only
+mode    = "workspace"
+# Maximum workspace size in MB (informational; not enforced by bwrap itself)
+max_size_mb = 500
 
 [agent]
 # Identité et contexte injecté dans chaque appel LLM conversationnel.

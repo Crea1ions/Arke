@@ -169,14 +169,14 @@ async def _execute_command(update: Update, command: str) -> None:
     
     Maps /check, /stats, /model, /skill, /config to Python handlers.
     """
-    from io import StringIO
-    
     # Create a printer function that collects output
     output_lines = []
     def printer(text: str = "") -> None:
         output_lines.append(text)
+        log.debug("telegram.command_output", text=text)  # Debug logging
     
     cmd = command.split()[0].lower()  # Get command without args
+    log.info("telegram.execute_command", cmd=cmd)
     
     try:
         if cmd == "/start":
@@ -188,24 +188,35 @@ async def _execute_command(update: Update, command: str) -> None:
             printer("Status: Ready")
             printer("")
             printer("Use `/help` for commands")
+            
         elif cmd == "/check":
-            from arke.chat_config import print_check
-            print_check(printer=printer)
+            try:
+                from arke.chat_config import print_check
+                print_check(printer=printer)
+            except Exception as exc:  # noqa: BLE001
+                printer(f"⚠️  /check error: {exc}")
+                log.error("telegram.check_error", error=str(exc))
+                
         elif cmd == "/stats":
-            from arke.skill_manager import SkillManager
-            sm = SkillManager()
-            stats = sm.get_stats()
-            if not stats:
-                printer("No tool usage recorded yet.")
-            else:
-                printer("📊 **Tool Usage Statistics**\n")
-                for row in stats:
-                    printer(
-                        f"  {row['tool_name']:<12} "
-                        f"{row['total_calls']:>3} calls · "
-                        f"{row['successes']:>3} ok · "
-                        f"{row['success_rate']:>5.1f}%"
-                    )
+            try:
+                from arke.skill_manager import SkillManager
+                sm = SkillManager()
+                stats = sm.get_stats()
+                if not stats:
+                    printer("📊 No tool usage recorded yet.")
+                else:
+                    printer("📊 **Tool Usage Statistics**\n")
+                    for row in stats:
+                        printer(
+                            f"  {row['tool_name']:<12} "
+                            f"{row['total_calls']:>3} calls · "
+                            f"{row['successes']:>3} ok · "
+                            f"{row['success_rate']:>5.1f}%"
+                        )
+            except Exception as exc:  # noqa: BLE001
+                printer(f"⚠️  /stats error: {exc}")
+                log.error("telegram.stats_error", error=str(exc))
+                
         elif cmd == "/help":
             printer("🤖 **Arke Telegram Bot**\n")
             printer("**Commands:**\n")
@@ -216,16 +227,30 @@ async def _execute_command(update: Update, command: str) -> None:
             printer("**Or send any text for agent-first execution.**")
             printer("")
             printer("The agent will decide whether to use tools (CLI, files, DB) or respond directly.")
+            
         else:
             printer(f"❓ Unknown command: {cmd}")
+            printer("Available: /start, /help, /check, /stats")
+            
     except Exception as exc:  # noqa: BLE001
-        printer(f"❌ Error executing {cmd}: {exc}")
-        log.error("telegram.command_error", command=cmd, error=str(exc))
+        error_msg = f"❌ Error executing {cmd}: {exc}"
+        printer(error_msg)
+        log.error("telegram.command_error", cmd=cmd, error=str(exc), exc_info=True)
     
     # Send accumulated output
     output = "\n".join(output_lines)
+    if not output:
+        output = "⚠️  No output generated"
+        log.warning("telegram.command_no_output", cmd=cmd)
+    
+    log.info("telegram.command_reply", cmd=cmd, length=len(output))
+    
+    # Send in chunks
     for chunk in _chunk_message(output):
-        await update.message.reply_text(chunk)  # type: ignore[union-attr]
+        try:
+            await update.message.reply_text(chunk)  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001
+            log.error("telegram.reply_error", chunk_len=len(chunk), error=str(exc))
 
 
 # ---------------------------------------------------------------------------

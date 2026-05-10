@@ -84,3 +84,6 @@ Thumbs.db
 # Optional dev files
 .vscode/settings.json
 .idea/workspace.xml
+Arke-05-sessions/
+debug-*.py
+verify-*.py

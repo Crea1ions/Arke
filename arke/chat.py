@@ -17,6 +17,7 @@ Boucle REPL avec :
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -54,6 +55,24 @@ _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
 
 # Active model alias for the current session (mutable via @alias or /model)
 _active_model_alias: list[str] = ["flash"]
+
+# Spinner frames for loading indication
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_spinner_state: list[int] = [0]
+
+
+def _spinner_tick() -> None:
+    """Print a spinner frame to indicate processing."""
+    frame = _SPINNER_FRAMES[_spinner_state[0] % len(_SPINNER_FRAMES)]
+    sys.stderr.write(f"\r{frame} Processing...")
+    sys.stderr.flush()
+    _spinner_state[0] += 1
+
+
+def _spinner_stop() -> None:
+    """Clear spinner and return to normal prompt."""
+    sys.stderr.write("\r" + " " * 20 + "\r")
+    sys.stderr.flush()
 
 
 def _get_alias() -> str:
@@ -239,61 +258,39 @@ def _pick_default_model() -> str | None:
 
 
 class StreamingMarkdownDisplay:
-    """Display streaming LLM output in real-time using Rich Live Markdown."""
+    """Display streaming LLM output by writing tokens directly to stdout.
 
-    def __init__(self, use_live: bool = True):
-        """Initialize streaming display.
-        
-        Args:
-            use_live: If True, use Rich Live for real-time updates (nicer but experimental).
-                     If False, use simple line buffering (more stable).
-        """
-        self.buffer = []
-        self.use_live = use_live
-        self._live = None
-        self._last_update_time = time.time()
-        self._update_interval = 0.05  # 50ms minimum between updates
-        
-        if use_live:
-            try:
-                from rich.live import Live
-                from rich.markdown import Markdown
-                
-                self._Live = Live
-                self._Markdown = Markdown
-            except ImportError:
-                self.use_live = False
-                log.warning("streaming.rich_not_available, falling back to line buffering")
+    Replaces the previous Rich Live + Markdown approach which caused display
+    freezes on long responses: ``Live.update(Markdown(full_text))`` re-parsed
+    and re-rendered ALL accumulated text on every token — O(n) per token,
+    O(n²) total — causing the stream to visibly freeze mid-response.
+
+    Tokens are written directly to stdout as they arrive.  ``use_live`` is
+    kept as a constructor parameter for API compatibility but is no longer used.
+    """
+
+    def __init__(self, use_live: bool = True):  # use_live kept for API compat
+        self.buffer: list[str] = []
+        self._started = False
 
     def add_token(self, token: str) -> None:
-        """Add a token to the display buffer and update if needed."""
+        """Write token directly to stdout for true real-time streaming."""
         self.buffer.append(token)
-        
-        # Update display every 50ms or immediately on line breaks
-        current_time = time.time()
-        should_update = (
-            "\n" in token
-            or (current_time - self._last_update_time) >= self._update_interval
-        )
-        
-        if should_update:
-            self._update_display()
-            self._last_update_time = time.time()
+        if not self._started:
+            # On the very first token, erase the "Thinking…" status line so
+            # streaming appears in its place.  Guard with isatty() so tests
+            # (non-TTY) receive a plain newline instead of ANSI codes.
+            if sys.stdout.isatty():
+                sys.stdout.write("\033[1A\033[2K\r")
+            else:
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._started = True
+        sys.stdout.write(token)
+        sys.stdout.flush()
 
     def _update_display(self) -> None:
-        """Update the live display with accumulated buffer."""
-        if not self.use_live:
-            return
-        
-        try:
-            full_text = "".join(self.buffer)
-            if not self._live:
-                self._live = self._Live(self._Markdown(full_text), transient=False)
-                self._live.start()
-            else:
-                self._live.update(self._Markdown(full_text))
-        except Exception as exc:
-            log.debug("streaming.display_update_failed", error=str(exc))
+        pass  # no-op, kept for API compatibility
 
     def get_full_text(self) -> str:
         """Get the complete accumulated text."""
@@ -301,15 +298,15 @@ class StreamingMarkdownDisplay:
 
     def tokens_added(self) -> bool:
         """Check if any tokens have been added to the buffer."""
-        return len(self.buffer) > 0
+        return bool(self.buffer)
 
     def close(self) -> None:
-        """Finalize and close the display."""
-        if self._live:
-            try:
-                self._live.stop()
-            except Exception:  # noqa: BLE001
-                pass
+        """Ensure streaming output ends on a fresh line."""
+        if self._started:
+            full = self.get_full_text()
+            if full and not full.endswith("\n"):
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +472,10 @@ def _ask_agent(
         "3. Créer un rapport avec les résultats\n"
         "/PLAN]\n"
         "Proceed with this plan?\n\n"
-        "Si tu n'as pas besoin d'outil, réponds normalement sans balises."
+        "Si tu n'as pas besoin d'outil, réponds normalement sans balises.\n\n"
+        "## Règle absolue\n"
+        "Tu réponds TOUJOURS. Même face à une réflexion ouverte ou une observation, "
+        "accuse réception et propose d'approfondir. Le silence n'est jamais une option."
     )
     
     # Build history context
@@ -519,10 +519,12 @@ Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [
             response_text, _cost, _tokens = manager.complete(
                 prompt=prompt, task_type="classification", max_tokens=16384
             )
+    except TimeoutError as exc:
+        log.error("llm.agent_timeout", error=str(exc))
+        raise  # Re-raise timeout so caller can handle it
     except Exception as exc:
-        log.error("llm.agent_decision_failed", error=str(exc))
-        # Fallback: treat as direct response
-        return {"tool": None, "response": f"Erreur LLM: {str(exc)}"}
+        log.error("llm.agent_decision_failed", error=str(exc), exc_info=True)
+        raise  # Re-raise so caller can handle it appropriately
     
     # Parse response with Markdown + [OUTIL:] and [ARGS:] tags
     response_text = response_text.strip()
@@ -573,6 +575,103 @@ Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [
 # Main REPL
 # ---------------------------------------------------------------------------
 
+# Visual newline placeholder used when pasted text is re-injected into
+# readline's editing buffer.  Actual \n is restored before dispatch.
+_PASTE_NL = " ↵ "
+
+
+def _read_paste_buffered(prompt: str) -> str:
+    """Read one logical message from stdin, accumulating multiline pastes.
+
+    Root cause of the fragmentation bug: Python's ``BufferedReader`` reads
+    the TTY kernel buffer in 8 KB chunks on the first ``readline()`` call,
+    draining the kernel fd.  Subsequent ``select()`` calls on that fd then
+    report "not ready" even though lines 3..N are sitting in Python's own
+    internal buffer — invisible to ``select``.
+
+    Fix: after ``input()`` returns line 1, temporarily set the raw fd to
+    ``O_NONBLOCK`` and drain with ``os.read()`` directly, bypassing all
+    Python IO buffering layers.  ``BlockingIOError`` signals that the kernel
+    buffer is empty — i.e. the paste is fully consumed.
+
+    When a paste is detected the full text is re-injected into readline's
+    editing buffer (with ↵ as a visual newline placeholder) so the user can
+    review and optionally edit before pressing Enter to confirm.  The ↵
+    markers are then restored to real newlines before the message is
+    dispatched to the agent.
+
+    Normal single-line typing: non-blocking ``os.read()`` raises
+    ``BlockingIOError`` immediately → zero perceptible delay.
+    """
+    raw = input(prompt)  # readline integration preserved (↑/↓ history, ANSI)
+    fd = sys.stdin.fileno()
+    old_fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, old_fl | os.O_NONBLOCK)
+    buf = b""
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                buf += chunk
+            except BlockingIOError:
+                break
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_fl)
+    if not buf:
+        return raw
+    text = buf.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    extra = text.split("\n")
+    if extra and extra[-1] == "":  # drop trailing empty element from trailing \n
+        extra.pop()
+    full_text = "\n".join([raw] + extra)
+    # Replace newlines with the visual placeholder so readline sees a single
+    # editable line (actual \n would be treated as "submit" by readline).
+    display = full_text.replace("\n", _PASTE_NL)
+    n_lines = full_text.count("\n") + 1
+    # Detect terminal width for ANSI erasure (0 = non-TTY/unknown → skip ANSI).
+    _tty = sys.stdout.isatty()
+    try:
+        term_cols = os.get_terminal_size().columns if _tty else 0
+    except OSError:
+        term_cols = 0
+
+    # Erase the first readline echo ("› line one") so it does not appear again
+    # later when user_block() prints the final clean display.
+    # Strip ANSI colour codes from prompt to get its visual display width.
+    if term_cols > 0:
+        prompt_vis = re.sub(r"\x1b\[[0-9;]*m", "", prompt)
+        first_rows = max(1, (len(prompt_vis) + len(raw) + term_cols - 1) // term_cols)
+        sys.stdout.write(f"\033[{first_rows}A\033[J")
+        sys.stdout.flush()
+
+    hint = f"{T.MUTED}  [↵ {n_lines} lignes collées · modifier si besoin puis Entrée pour envoyer]{T.RESET}"
+    print(hint)
+
+    def _pre_hook() -> None:
+        readline.insert_text(display)
+        readline.redisplay()
+
+    readline.set_pre_input_hook(_pre_hook)
+    try:
+        reviewed = input(prompt)
+    finally:
+        readline.set_pre_input_hook(None)
+
+    # Erase hint line + review input line(s) — user_block() will be the only display.
+    # After Enter: cursor is 1 row below the last review row.
+    # Hint is 1 row above the first review row.
+    # Total rows to go up: review_rows + 1 (the 1 is for the hint row).
+    if term_cols > 0:
+        prompt_vis = re.sub(r"\x1b\[[0-9;]*m", "", prompt)
+        review_rows = max(1, (len(prompt_vis) + len(display) + term_cols - 1) // term_cols)
+        sys.stdout.write(f"\033[{review_rows + 1}A\033[J")
+        sys.stdout.flush()
+
+    # Restore real newlines from the visual placeholders.
+    return reviewed.replace(_PASTE_NL, "\n")
+
 
 def start() -> None:
     """Launch the interactive REPL."""
@@ -620,7 +719,26 @@ def start() -> None:
             stream_display.add_token(token)
         
         # Ask agent to decide: tool or direct response (with streaming)
-        agent_decision = _ask_agent(cognitive_json, intention, context, stream_display_callback=stream_callback)
+        # Show spinner while waiting for LLM response
+        print(f"\n{T.MUTED}Thinking...{T.RESET}")
+        try:
+            agent_decision = _ask_agent(cognitive_json, intention, context, stream_display_callback=stream_callback)
+        except TimeoutError as exc:
+            print(f"\n{T.error()}LLM Provider Timeout{T.RESET}")
+            print(f"{T.MUTED}The LLM provider did not respond within 60 seconds.{T.RESET}")
+            print(f"{T.MUTED}Possible causes:{T.RESET}")
+            print(f"{T.MUTED}- API overloaded or down{T.RESET}")
+            print(f"{T.MUTED}- Network issue{T.RESET}")
+            print(f"{T.MUTED}- Message too long for the model{T.RESET}")
+            history_append(mm, "user", intention, model_used=None)
+            history_append(mm, "assistant", f"Error: {exc}", model_used=None)
+            return
+        except Exception as exc:
+            print(f"\n{T.error()}Error contacting LLM{T.RESET}")
+            print(f"{T.MUTED}Error: {exc}{T.RESET}")
+            history_append(mm, "user", intention, model_used=None)
+            history_append(mm, "assistant", f"Error: {exc}", model_used=None)
+            return
         
         # Finalize streaming display
         stream_display.close()
@@ -749,7 +867,7 @@ def start() -> None:
 
     while True:
         try:
-            raw = input(T.prompt_line(_get_alias()))
+            raw = _read_paste_buffered(T.prompt_line(_get_alias()))
             _ctrl_c_count[0] = 0
         except KeyboardInterrupt:
             _ctrl_c_count[0] += 1
