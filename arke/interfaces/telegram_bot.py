@@ -126,16 +126,16 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(chunk)  # type: ignore[union-attr]
         return
 
-    # Case 2: Agent requests tool execution
+     # Case 2: Agent requests tool execution
     tool_name = agent_decision.get("tool")
     log.info("telegram.agent_requested_tool", tool_name=tool_name)
 
-    # Execute via orchestrator (maintains tool-side safety)
+    # Execute via same flow as terminal: agent_decision → orchestrator.run()
+    ctx["agent_decision"] = agent_decision
     loop = asyncio.get_event_loop()
     task = await loop.run_in_executor(
         None, orchestrator.run, intention, ctx
     )
-
     # Format result
     if task.status == StepStatus.SUCCESS:
         last_step = task.steps[-1] if task.steps else None
@@ -152,7 +152,8 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             (s for s in task.steps if s.status == StepStatus.FAILED), None
         )
         if failed_step:
-            text = f"❌ Failed at step {failed_step.id}: {failed_step.error or 'unknown error'}"
+            stderr = failed_step.output.get("stderr", "") if isinstance(failed_step.output, dict) else ""
+            text = f"❌ Failed at step {failed_step.id}: {stderr or 'unknown error'}"
         else:
             text = "❌ Task execution failed"
 
