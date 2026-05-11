@@ -123,8 +123,6 @@ graph TD
     style J fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
     style K fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
     style B fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-
-    linkStyle default stroke:#5a5a5a,stroke-width:1px
 ```
 
 ---
