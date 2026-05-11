@@ -99,7 +99,7 @@ Only the agent decides.
 ---
 
 # 🏗️ Execution Pipeline
-
+---
 ```mermaid
 graph TD
     A[User Input] --> B[Conversation Context]
