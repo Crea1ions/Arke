@@ -23,7 +23,7 @@ Arke enforces a strict separation that most systems blur over time:
 | Agent     | Understands, reasons, decides          |
 | System    | Executes, validates, isolates, traces  |
 
-```text
+
 User → Agent (SOLE DECIDER) → System (EXECUTION ONLY)
 
 
