@@ -100,51 +100,51 @@ Only the agent decides.
 
 # 🏗️ Execution Pipeline
 
-User Input
+[User Input]
 
 ↓
 
-Conversation Context (session.db)
+[Conversation Context (session.db)]
 
 ↓
 
-Agent LLM (SOLE DECIDER)
+[Agent LLM (SOLE DECIDER)]
 
 ↓
 
-Tool Intent
+[Tool Intent]
 
 ↓
 
-Unified Endpoint
+[Unified Endpoint]
 
 ↓
 
-Deterministic Orchestrator
+[Deterministic Orchestrator]
 
 ↓
 
-Validation Gates (schema, filesystem, return codes)
+[Validation Gates (schema, filesystem, return codes)]
 
 ↓
 
-Sandbox Execution (bubblewrap)
+[Sandbox Execution (bubblewrap)]
 
 ↓
 
-Telemetry (OpenTelemetry)
+[Telemetry (OpenTelemetry)]
 
 ↓
 
-Response
+[Response]
 
 ↓
 
-Memory Update (skills + history)
+[Memory Update (skills + history)]
 
 ↓
 
-(loop back to Conversation Context)
+[(loop back to Conversation Context)]
 
 ---
 
@@ -171,10 +171,10 @@ This guarantees:
 
 | Database     | Purpose                                 |
 | ------------ | --------------------------------------- |
-| `global.db`  | Preferences, skills, long-term patterns |
-| `project.db` | Project-specific context                |
-| `session.db` | Active conversation state               |
-| `cache.db`   | LLM cache and embeddings                |
+| [`global.db`]  | Preferences, skills, long-term patterns |
+| [`project.db`] | Project-specific context                |
+| [`session.db`] | Active conversation state               |
+| [`cache.db`]   | LLM cache and embeddings                |
 
 Memory strategy:
 
