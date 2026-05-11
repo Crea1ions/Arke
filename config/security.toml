@@ -2,11 +2,19 @@
 # Strict whitelist v0.2 -- only these commands are permitted.
 # To add a command: document the decision in Arke-DECISION.md first.
 allowed_commands = [
+    # Text / search
     "echo", "cat", "grep", "find", "ls", "head", "tail",
-    "wc", "sort", "uniq", "awk", "sed", "cut", "tr",
+    "wc", "sort", "uniq", "awk", "sed", "cut", "tr", "tee",
+    # System info (read-only)
+    "uptime", "free", "df", "du", "ps", "uname", "hostname",
+    "id", "whoami", "pwd", "stat", "env", "which", "lscpu", "lsblk",
+    # Media
     "mogrify", "convert", "ffmpeg",
+    # Dev
     "git", "python", "python3",
+    # Network (read-only)
     "curl", "wget", "jq",
+    # File ops
     "date", "touch", "rm", "mkdir", "cp", "mv"
 ]
 

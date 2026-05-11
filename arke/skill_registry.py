@@ -49,12 +49,23 @@ class SkillRegistry:
     def activate(self, template: SkillTemplate) -> str:
         """Persist a skill derived from a :class:`~arke.skill_detector.SkillTemplate`.
 
+        If a skill with the same name already exists, returns its existing id
+        without creating a duplicate.
+
         Args:
             template: The proposed skill to activate.
 
         Returns:
-            UUID string of the newly created ``skills`` row.
+            UUID string of the ``skills`` row (new or existing).
         """
+        existing = self._mem.query(
+            "global",
+            "SELECT id FROM skills WHERE name = ? LIMIT 1",
+            (template.name,),
+        )
+        if existing:
+            return existing[0]["id"]
+
         skill_id = str(uuid.uuid4())
         self._mem.query(
             "global",

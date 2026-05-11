@@ -179,7 +179,10 @@ def _exec_cli(step: Step) -> dict[str, Any]:
     from arke.sandbox import load_sandbox_config, sandboxed_run
 
     command: str = step.arguments["command"]
-    check_command(command)  # raises if not whitelisted
+    try:
+        check_command(command)  # raises ValueError if not whitelisted
+    except ValueError as exc:
+        return {"return_code": 1, "stdout": "", "stderr": str(exc)}
 
     cfg = load_sandbox_config()
     sandbox_enabled: bool = cfg.get("enabled", True)
