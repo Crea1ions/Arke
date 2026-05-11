@@ -102,16 +102,16 @@ Only the agent decides.
 
 ```mermaid
 graph TD
-    A[User Input] --> B[Conversation Context<br/>session.db]
-    B --> C[Agent LLM<br/>SOLE DECIDER]
+    A[User Input] --> B[Conversation Context]
+    B --> C[Agent LLM]
     C --> D[Tool Intent]
     D --> E[Unified Endpoint]
     E --> F[Deterministic Orchestrator]
-    F --> G[Validation Gates<br/>schema · filesystem · return codes]
-    G --> H[Sandbox Execution<br/>bubblewrap]
-    H --> I[Telemetry<br/>OpenTelemetry]
+    F --> G[Validation Gates]
+    G --> H[Sandbox Execution]
+    H --> I[Telemetry]
     I --> J[Response]
-    J --> K[Memory Update<br/>skills + history]
+    J --> K[Memory Update]
     K --> B
 
     style C fill:#2d2d2d,stroke:#78c8ff,stroke-width:3px,color:#e0e0e0
@@ -166,14 +166,14 @@ Memory strategy:
 ---
 ```mermaid
 graph TD
-    G[global.db<br/>Skills · Patterns · Preferences] --> M[Memory Layer]
-    P[project.db<br/>Project Context · Documents] --> M
-    S[session.db<br/>Active State · Chat History] --> M
-    C[cache.db<br/>LLM Cache · Embeddings] --> M
+    G[global.db] --> M[Memory Layer]
+    P[project.db] --> M
+    S[session.db] --> M
+    C[cache.db] --> M
 
-    M --> FTS[FTS5<br/>Full-text Search]
-    M --> VEC[sqlite-vec<br/>Semantic Retrieval<br/>< 5 ms]
-    M --> LLM[LLM Fallback<br/>Only if insufficient]
+    M --> FTS[FTS5 Full-text]
+    M --> VEC[sqlite-vec Semantic]
+    M --> LLM[LLM Fallback]
 
     style G fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
     style P fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
