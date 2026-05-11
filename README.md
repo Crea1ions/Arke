@@ -99,7 +99,7 @@ Only the agent decides.
 ---
 
 # 🏗️ Execution Pipeline
----
+
 ```mermaid
 graph TD
     A[User Input] --> B[Conversation Context]
@@ -163,7 +163,7 @@ Memory strategy:
 * **sqlite-vec** → semantic retrieval (< 5 ms on small corpora)
 * **LLM fallback** → only when retrieval is insufficient
 
----
+
 ```mermaid
 graph TD
     G[global.db] --> M[Memory Layer]
