@@ -330,6 +330,16 @@ Stop at the first sufficient level
 - system_never_interprets = true
 - system_never_decides_tools = true
 - system_never_executes_without_llm_intent = true
+- system_never_engages_for_engagement = true
+
+---
+
+## Invariant 4 — Sobriété cognitive
+
+Une initiative ne cherche jamais à maintenir l'engagement. Elle réactive uniquement un fil cognitif à valeur intrinsèque. Le système doit savoir se taire. Une initiative silencieuse est préférable à une initiative vide.
+
+❌ "Tu travailles encore sur ce sujet ?" → continuité sociale  
+✅ "En y repensant, cette idée implique peut-être que..." → continuité intellectuelle
 
 ---
 

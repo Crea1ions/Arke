@@ -45,6 +45,8 @@ from arke.chat_router import (
 )
 from arke.anti_drift_metrics import get_metrics_instance
 from arke.tool_registry import TOOL_REGISTRY
+from arke.thread_extractor import extract_async
+from arke.social_orchestrator import SocialOrchestrator
 
 log = structlog.get_logger()
 
@@ -749,6 +751,13 @@ def start() -> None:
     _ctrl_c_count = [0]
     _task_running = [False]
 
+    # --- Cognitive continuity infrastructure ---
+    import uuid as _uuid
+    _session_id = str(_uuid.uuid4())
+    _social_orchestrator = SocialOrchestrator(mm, _session_id)
+    _social_orchestrator.start()
+    _cancel_extraction = [None]  # type: list[threading.Event | None]
+
     def _run_task(result: RouteResult) -> None:
         """Execute a task intention through the orchestrator with threaded step display."""
         import arke.orchestrator as orch
@@ -919,14 +928,35 @@ def start() -> None:
         history_append(mm, "user", intention, model_used=None)
         history_append(mm, "arke", response_text, model_used=result.model_id)
 
+        # --- Cognitive continuity: record exchange + trigger extraction ---
+        depth_score = min((len(intention) + len(response_text)) / 2000.0, 1.0)
+        _social_orchestrator.record_exchange(depth_score)
+        # Cancel previous extraction if still pending, start fresh
+        if _cancel_extraction[0] is not None:
+            _cancel_extraction[0].set()
+        import threading as _threading
+        _cancel_extraction[0] = _threading.Event()
+        extract_async(mm, _session_id, intention, response_text, _cancel_extraction[0])
+
     # -----------------------------------------------------------------------
     # REPL loop
     # -----------------------------------------------------------------------
 
     while True:
         try:
-            # input() uses readline internally, handles multiline paste natively
-            raw = input(T.prompt_line(_get_alias()))
+            # Signal any pending extraction to abort (user is active)
+            _social_orchestrator.record_input()
+            if _cancel_extraction[0] is not None:
+                _cancel_extraction[0].set()
+
+            # Check for pending cognitive initiative (pull model, Phase 0: always None)
+            if _social_orchestrator.has_pending_initiative():
+                if _social_orchestrator.is_user_idle():
+                    initiative = _social_orchestrator.pop_initiative()
+                    if initiative:
+                        print(T.initiative_block(initiative))
+
+            raw = _read_paste_buffered(T.prompt_line(_get_alias()))
             _ctrl_c_count[0] = 0
         except KeyboardInterrupt:
             _ctrl_c_count[0] += 1
@@ -994,6 +1024,45 @@ def start() -> None:
                 from arke.chat_config import run_config
                 run_config()
 
+            elif cmd == "/threads":
+                threads = _social_orchestrator.list_threads()
+                if not threads:
+                    print(f"{T.MUTED}Aucun fil cognitif actif.{T.RESET}")
+                else:
+                    print(f"{T.ACCENT}Fils cognitifs actifs ({len(threads)}) :{T.RESET}")
+                    for th in threads:
+                        score = f"{th['importance_score']:.2f}"
+                        print(
+                            f"  {T.MUTED}#{th['id']}{T.RESET} "
+                            f"[{T.ACCENT}{score}{T.RESET}] "
+                            f"{T.TEXT}{th['content'][:80]}{T.RESET} "
+                            f"{T.MUTED}({th['status']}){T.RESET}"
+                        )
+
+            elif cmd == "/drop-thread":
+                try:
+                    tid = int(raw.split()[1])
+                    ok = _social_orchestrator.drop_thread(tid)
+                    msg = f"Fil #{tid} marqué consumed." if ok else f"Fil #{tid} introuvable."
+                    print(f"{T.MUTED}{msg}{T.RESET}")
+                except (ValueError, IndexError):
+                    print(f"{T.MUTED}Usage : /drop-thread <id>{T.RESET}")
+
+            elif cmd == "/pause-initiatives":
+                hours = 8.0
+                parts = raw.split()
+                if len(parts) > 1:
+                    try:
+                        hours = float(parts[1].rstrip("h"))
+                    except ValueError:
+                        pass
+                _social_orchestrator.pause(hours)
+                print(f"{T.MUTED}Initiatives suspendues pour {hours:.0f}h.{T.RESET}")
+
+            elif cmd == "/resume-initiatives":
+                _social_orchestrator.resume()
+                print(f"{T.MUTED}Initiatives réactivées.{T.RESET}")
+
             # Track slash command in metrics
             get_metrics_instance().increment_slash_or_model()
             continue
@@ -1022,6 +1091,9 @@ def start() -> None:
                 log.error("chat.task.error", error=str(exc))
             finally:
                 _task_running[0] = False
+
+    # Clean shutdown
+    _social_orchestrator.stop()
 
 
 # ---------------------------------------------------------------------------

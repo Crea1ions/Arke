@@ -374,3 +374,23 @@ def banner(sandbox: bool = True) -> str:
     # ── bottom border ─────────────────────────────────────────────────────────
     lines.append(f"{BORDER}╰{'─' * inner}╯{RESET}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Cognitive initiative block
+# ---------------------------------------------------------------------------
+
+_INITIATIVE_C = _rgb(181, 160, 255)  # soft violet — distinct from all other roles
+
+
+def initiative_block(text: str) -> str:
+    """Format a cognitive initiative for REPL display.
+
+    Visually distinct from user/agent blocks to signal it is a system-initiated
+    cognitive resumption, not a response to a user message.
+    """
+    from datetime import datetime
+    ts = datetime.now().strftime("%H:%M")
+    header = f"{BORDER}├─{RESET} {_INITIATIVE_C}◈ arke{RESET} {MUTED}· {ts} · reprise cognitive{RESET}"
+    content = f"{BORDER}│{RESET}  {ITALIC}{_INITIATIVE_C}{text}{RESET}"
+    return f"{BORDER}│{RESET}\n{header}\n{content}"

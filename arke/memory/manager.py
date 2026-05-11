@@ -27,7 +27,10 @@ _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Tables that belong to each database (used for selective schema init)
 _DB_TABLE_PREFIXES: dict[str, list[str]] = {
-    "global": ["config", "tool_usage", "skills", "pattern_log", "agent_learnings"],
+    "global": [
+        "config", "tool_usage", "skills", "pattern_log", "agent_learnings",
+        "cognitive_threads", "interaction_density", "initiative_simulation_log",
+    ],
     "project": ["docs"],
     "session": ["session_context", "active_tasks", "chat_history", "memory_fts"],
     "cache": ["llm_cache"],

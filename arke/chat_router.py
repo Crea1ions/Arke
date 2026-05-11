@@ -49,6 +49,10 @@ SLASH_COMMANDS: dict[str, str] = {
     "/about":  "À propos d'Arke (architecture, philosophie)",
     "/clear":  "Efface l'historique de session",
     "/exit":   "Quitter Arke Chat",
+    "/threads":            "Liste les fils cognitifs actifs",
+    "/drop-thread":        "Abandonne un fil cognitif (/drop-thread <id>)",
+    "/pause-initiatives":  "Suspend les initiatives cognitive (/pause-initiatives [heures])",
+    "/resume-initiatives": "Réactive les initiatives cognitives",
 }
 
 # ---------------------------------------------------------------------------

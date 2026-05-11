@@ -117,6 +117,56 @@ CREATE TRIGGER IF NOT EXISTS chat_history_ad AFTER DELETE ON chat_history BEGIN
 END;
 
 -- ============================================================
+-- cognitive_threads — Latent cognitive threads (cross-session continuity)
+-- Stored in global.db for persistence across sessions.
+-- State machine: open → resurfaced → consumed | dormant
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cognitive_threads (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id           TEXT      NOT NULL,
+    content              TEXT      NOT NULL,
+    summary              TEXT,
+    source_exchange_at   TEXT,
+    importance_score     REAL      DEFAULT 0.5,
+    status               TEXT      DEFAULT 'open',  -- open|resurfaced|consumed|dormant
+    activation_count     INTEGER   DEFAULT 0,
+    ignored_count        INTEGER   DEFAULT 0,
+    last_activated_at    TEXT,
+    rescored_at          TEXT,
+    created_at           TEXT      DEFAULT (datetime('now')),
+    tags                 TEXT      DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_cthreads_status   ON cognitive_threads(status);
+CREATE INDEX IF NOT EXISTS idx_cthreads_score    ON cognitive_threads(importance_score);
+CREATE INDEX IF NOT EXISTS idx_cthreads_session  ON cognitive_threads(session_id);
+
+-- ============================================================
+-- interaction_density — Daily exchange count for pattern modulation
+-- Feeds SocialOrchestrator._select_allowed_patterns()
+-- ============================================================
+CREATE TABLE IF NOT EXISTS interaction_density (
+    day              TEXT PRIMARY KEY,          -- date('now') → 'YYYY-MM-DD'
+    exchange_count   INTEGER  DEFAULT 0,
+    avg_depth_score  REAL     DEFAULT 0.0
+);
+
+-- ============================================================
+-- initiative_simulation_log — Phase 0 observation log
+-- Records what WOULD have been sent (without actually sending anything).
+-- Used for qualitative calibration of thresholds before activation.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS initiative_simulation_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id           INTEGER,
+    would_have_sent_at  TEXT,
+    thread_summary      TEXT,
+    allowed_patterns    TEXT,          -- JSON array of allowed patterns at that moment
+    suppressed_reason   TEXT,          -- "user_active"|"cooldown"|"observation_mode"|"no_idle"
+    created_at          TEXT DEFAULT (datetime('now'))
+);
+
+-- ============================================================
 -- cache.db — LLM optimisation (cached responses, TTL)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS llm_cache (
