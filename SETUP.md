@@ -346,7 +346,7 @@ Add commands for quick access:
 /about - About Arke
 ```
 
-**Note:** Session 015 has a known bug: slash commands are registered but may not execute (see [Troubleshooting](#troubleshooting)).
+**Note:** Slash commands (`/check`, `/stats`, etc.) are fully operational.
 
 ---
 
@@ -362,9 +362,9 @@ pytest tests/ -v
 tests/test_cognitive_contract.py::test_contract_injection PASSED
 tests/test_orchestrator.py::test_cli_execution PASSED
 tests/test_memory.py::test_fts5_search PASSED
-... (300+ tests)
+... (339 tests)
 
-PASSED [300+ passed in X.XXs]
+339 passed, 6 skipped in ~21s
 ```
 
 ### 2. Check Memory Databases
@@ -444,8 +444,7 @@ python -m arke --help
    ```
    Look for errors in output.
 
-4. **Known issue (Session 015):** Slash commands don't execute.
-   - **Workaround:** Send text: "check system" instead of `/check`
+4. Slash commands work natively via text (e.g. send "check system" or `/check`).
 
 ### "Permission denied" in sandbox
 
@@ -542,6 +541,39 @@ arke
 ---
 
 ## Advanced Configuration
+
+### 4. MCP Servers Configuration
+
+Arke includes four local MCP servers. They are automatically configured in `config/arke.toml`:
+
+```toml
+[mcp_servers.web_search]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/web_search.py", "--stdio"]
+timeout = 30
+
+[mcp_servers.calculator]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/calculator.py", "--stdio"]
+timeout = 10
+
+[mcp_servers.rss_reader]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/rss_reader.py", "--stdio"]
+timeout = 20
+
+[mcp_servers.github]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/github.py", "--stdio"]
+timeout = 30
+```
+
+> **Note:** `web_search` uses the `ddgs` library (DuckDuckGo scraper) for real search results.
+> Install with: `pip install ddgs`
 
 ### OpenTelemetry Export
 

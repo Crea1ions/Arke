@@ -53,6 +53,63 @@ from arke import chat_theme as T  # noqa: E402
 
 _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
 
+# Visual placeholder for newline in the paste-review prompt
+_PASTE_NL = " ↵ "
+
+
+def _read_paste_buffered(prompt: str) -> str:
+    """Read one user turn, absorbing pasted multiline text into a review step.
+
+    For single-line input the behaviour is identical to ``input(prompt)``.
+    When the OS stdin buffer still contains data after the first ``input()``
+    call (i.e. the user pasted multiple lines), the remaining bytes are drained
+    via a non-blocking ``os.read()`` loop, assembled into a single string, and
+    re-injected into a second ``input()`` so the user can review and edit before
+    confirming with Enter.
+
+    The fd ``O_NONBLOCK`` flag is always restored in a ``finally`` block.
+    """
+    first_line = input(prompt)
+
+    fd = sys.stdin.fileno()
+    old_fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, old_fl | os.O_NONBLOCK)
+    buf = b""
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                buf += chunk
+            except BlockingIOError:
+                break
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_fl)
+
+    if not buf:
+        return first_line
+
+    # Decode + normalise line endings
+    extra = buf.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    full_text = (first_line + "\n" + extra).rstrip("\n")
+
+    # Build display: replace \n with _PASTE_NL for inline review
+    display = full_text.replace("\n", _PASTE_NL)
+
+    def _pre_hook() -> None:
+        readline.insert_text(display)
+        readline.redisplay()
+
+    readline.set_pre_input_hook(_pre_hook)
+    try:
+        reviewed = input(prompt)
+    finally:
+        readline.set_pre_input_hook(None)
+
+    return reviewed.replace(_PASTE_NL, "\n")
+
+
 # Active model alias for the current session (mutable via @alias or /model)
 _active_model_alias: list[str] = ["flash"]
 
@@ -147,6 +204,52 @@ def build_cognitive_context(user_message: str, session_id: str = "") -> str:
             "agent_decides_everything": True,
             "system_never_interprets": True,
             "system_never_executes_without_llm_intent": True
+        },
+        "mcp_servers": {
+            "web_search": {
+                "type": "Python",
+                "timeout": 30,
+                "tools": [
+                    {"name": "web_search", "description": "Recherche web via DuckDuckGo", "params": ["query", "max_results"]},
+                    {"name": "fetch_page", "description": "Récupère contenu complet d'une page", "params": ["url", "max_length"]}
+                ]
+            },
+            "calculator": {
+                "type": "Python",
+                "timeout": 10,
+                "tools": [
+                    {"name": "calculate", "description": "Évalue expression mathématique", "params": ["expression"]},
+                    {"name": "convert_units", "description": "Convertit unité (m→cm, €→$, etc)", "params": ["value", "from_unit", "to_unit"]},
+                    {"name": "random_number", "description": "Génère nombre aléatoire", "params": ["min", "max", "integer"]},
+                    {"name": "statistics", "description": "Calcule stats (mean/median/sum/min/max/variance)", "params": ["numbers", "operation"]}
+                ]
+            },
+            "rss_reader": {
+                "type": "Python",
+                "timeout": 20,
+                "tools": [
+                    {"name": "read_rss", "description": "Lit flux RSS/Atom", "params": ["url", "limit"]},
+                    {"name": "discover_rss", "description": "Découvre flux RSS sur un site", "params": ["url"]},
+                    {"name": "fetch_full_content", "description": "Récupère contenu complet d'un article RSS", "params": ["url"]}
+                ]
+            },
+            "github": {
+                "type": "Python",
+                "timeout": 30,
+                "tools": [
+                    {"name": "github_repo", "description": "Info dépôt GitHub (stars, description, etc)", "params": ["owner", "repo"]},
+                    {"name": "github_search", "description": "Recherche dépôts GitHub", "params": ["query", "max_results", "sort"]},
+                    {"name": "github_readme", "description": "Récupère README d'un dépôt", "params": ["owner", "repo", "branch"]},
+                    {"name": "github_user", "description": "Info utilisateur GitHub", "params": ["username"]}
+                ]
+            },
+            "freeweb": {
+                "type": "npx",
+                "timeout": 60,
+                "tools": [
+                    {"name": "web_search", "description": "Recherche multi-source (Yahoo, Bing)", "params": ["query", "max_results"]}
+                ]
+            }
         }
     }
     
@@ -258,39 +361,61 @@ def _pick_default_model() -> str | None:
 
 
 class StreamingMarkdownDisplay:
-    """Display streaming LLM output by writing tokens directly to stdout.
+    """Display streaming LLM output in real-time using Rich Live Markdown."""
 
-    Replaces the previous Rich Live + Markdown approach which caused display
-    freezes on long responses: ``Live.update(Markdown(full_text))`` re-parsed
-    and re-rendered ALL accumulated text on every token — O(n) per token,
-    O(n²) total — causing the stream to visibly freeze mid-response.
-
-    Tokens are written directly to stdout as they arrive.  ``use_live`` is
-    kept as a constructor parameter for API compatibility but is no longer used.
-    """
-
-    def __init__(self, use_live: bool = True):  # use_live kept for API compat
-        self.buffer: list[str] = []
-        self._started = False
+    def __init__(self, use_live: bool = True):
+        """Initialize streaming display.
+        
+        Args:
+            use_live: If True, use Rich Live for real-time updates (nicer but experimental).
+                     If False, use simple line buffering (more stable).
+        """
+        self.buffer = []
+        self.use_live = use_live
+        self._live = None
+        self._last_update_time = time.time()
+        self._update_interval = 0.05  # 50ms minimum between updates
+        
+        if use_live:
+            try:
+                from rich.live import Live
+                from rich.markdown import Markdown
+                
+                self._Live = Live
+                self._Markdown = Markdown
+            except ImportError:
+                self.use_live = False
+                log.warning("streaming.rich_not_available, falling back to line buffering")
 
     def add_token(self, token: str) -> None:
-        """Write token directly to stdout for true real-time streaming."""
+        """Add a token to the display buffer and update if needed."""
         self.buffer.append(token)
-        if not self._started:
-            # On the very first token, erase the "Thinking…" status line so
-            # streaming appears in its place.  Guard with isatty() so tests
-            # (non-TTY) receive a plain newline instead of ANSI codes.
-            if sys.stdout.isatty():
-                sys.stdout.write("\033[1A\033[2K\r")
-            else:
-                sys.stdout.write("\n")
-            sys.stdout.flush()
-            self._started = True
-        sys.stdout.write(token)
-        sys.stdout.flush()
+        
+        # Update display every 50ms or immediately on line breaks
+        current_time = time.time()
+        should_update = (
+            "\n" in token
+            or (current_time - self._last_update_time) >= self._update_interval
+        )
+        
+        if should_update:
+            self._update_display()
+            self._last_update_time = time.time()
 
     def _update_display(self) -> None:
-        pass  # no-op, kept for API compatibility
+        """Update the live display with accumulated buffer."""
+        if not self.use_live:
+            return
+        
+        try:
+            full_text = "".join(self.buffer)
+            if not self._live:
+                self._live = self._Live(self._Markdown(full_text), transient=False)
+                self._live.start()
+            else:
+                self._live.update(self._Markdown(full_text))
+        except Exception as exc:
+            log.debug("streaming.display_update_failed", error=str(exc))
 
     def get_full_text(self) -> str:
         """Get the complete accumulated text."""
@@ -298,15 +423,15 @@ class StreamingMarkdownDisplay:
 
     def tokens_added(self) -> bool:
         """Check if any tokens have been added to the buffer."""
-        return bool(self.buffer)
+        return len(self.buffer) > 0
 
     def close(self) -> None:
-        """Ensure streaming output ends on a fresh line."""
-        if self._started:
-            full = self.get_full_text()
-            if full and not full.endswith("\n"):
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+        """Finalize and close the display."""
+        if self._live:
+            try:
+                self._live.stop()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -411,11 +536,34 @@ def _ask_agent(
         "[ARGS: {\"path\": \"/etc/hostname\"}]\n\n"
         "[OUTIL: sqlite]\n"
         "[ARGS: {\"db\": \"session\", \"query\": \"INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)\", \"params\": [\"projet\", \"Arke\"]}]\n\n"
-        "## Outils disponibles\n"
+        "## Outils disponibles (hiérarchie: simplest-first, local-first, MCP-last)\n"
         "- fs : fichiers et dossiers. Lit le contenu, liste les répertoires. Ne crée pas de fichiers.\n"
         "- cli : exécute une commande shell. Pour créer/modifier un fichier, utiliser echo ou un redirect.\n"
         "- sqlite : requêtes SQL sur les bases mémoire (session, global, project).\n"
-        "- mcp : services externes, rarement nécessaire.\n\n"
+        "- mcp : services externes (5 serveurs, 13 outils) — DERNIER RECOURS après avoir vérifié les niveaux 0-3.\n\n"
+        "## MCP — Services externes disponibles (5 serveurs, 13 outils)\n"
+        "IMPORTANT : Utilise MCP UNIQUEMENT après avoir vérifié que les outils locaux (fs, cli, sqlite) sont insuffisants.\n\n"
+        "### 5 serveurs MCP disponibles\n"
+        "1. **web_search** (Python) — Recherche web DuckDuckGo\n"
+        "   - Outils : web_search, fetch_page\n\n"
+        "2. **calculator** (Python) — Calculs mathématiques\n"
+        "   - Outils : calculate, convert_units, random_number, statistics\n\n"
+        "3. **rss_reader** (Python) — Lecteur RSS/Atom\n"
+        "   - Outils : read_rss, discover_rss, fetch_full_content\n\n"
+        "4. **github** (Python) — API GitHub\n"
+        "   - Outils : github_repo, github_search, github_readme, github_user\n\n"
+        "5. **freeweb** (npx) — Recherche web multi-source (Yahoo, Bing, etc.)\n\n"
+        "### Format d'appel MCP (2 formats supportés)\n"
+        "**Format 1 : Recommandé (serveurs Python)**\n"
+        "[OUTIL: mcp]\n"
+        "[ARGS: {\"_server\": \"SERVER_NAME\", \"tool_name\": \"TOOL_NAME\", \"tool_args\": {\"arg1\": \"value1\"}}]\n\n"
+        "Exemples:\n"
+        "- Cherche web : {\"_server\": \"web_search\", \"tool_name\": \"web_search\", \"tool_args\": {\"query\": \"machine learning\", \"max_results\": 5}}\n"
+        "- Calcul : {\"_server\": \"calculator\", \"tool_name\": \"calculate\", \"tool_args\": {\"expression\": \"25% of 1000\"}}\n"
+        "- RSS : {\"_server\": \"rss_reader\", \"tool_name\": \"read_rss\", \"tool_args\": {\"url\": \"https://simonwillison.net/atom.xml\", \"limit\": 3}}\n"
+        "- GitHub : {\"_server\": \"github\", \"tool_name\": \"github_search\", \"tool_args\": {\"query\": \"arke agent\", \"max_results\": 3}}\n\n"
+        "**Format 2 : Legacy (fallback)**\n"
+        "[ARGS: {\"service\": \"SERVICE\", \"action\": \"ACTION\", \"params\": {...}}]\n\n"
         "## Sandbox CLI\n"
         "IMPORTANT : Chaque commande CLI s'exécute dans un environnement isolé. "
         "Un fichier créé dans /tmp n'existe que pendant cette commande. "
@@ -531,16 +679,23 @@ Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [
     
     # Look for [OUTIL: tool_name] and [ARGS: {...}] tags
     outil_match = re.search(r'\[OUTIL:\s*(\w+)\]', response_text)
-    args_match = re.search(r'\[ARGS:\s*(\{.*?\})\]', response_text, re.DOTALL)
+    args_match = re.search(r'\[ARGS:\s*(\{)', response_text)
     
     if outil_match and args_match:
         # Extract tool and args
         tool = outil_match.group(1).lower()
         try:
-            args_json = args_match.group(1)
-            args = json.loads(args_json)
-        except json.JSONDecodeError:
-            log.warning("llm.agent_args_parse_failed", raw=args_json[:100])
+            # Find the start of the JSON object and parse it properly
+            json_start = args_match.start(1)
+            # Find matching closing brace using JSON parsing (more reliable than regex)
+            json_str = response_text[json_start:]
+            
+            # Use json.JSONDecoder to find where the JSON ends
+            decoder = json.JSONDecoder()
+            args, idx = decoder.raw_decode(json_str)
+            args_json = json_str[:idx]
+        except json.JSONDecodeError as exc:
+            log.warning("llm.agent_args_parse_failed", error=str(exc), raw=json_str[:100] if 'json_str' in locals() else "")
             args = {}
         
         # Remove tags from response text to show only Markdown
@@ -574,103 +729,6 @@ Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [
 
 # Main REPL
 # ---------------------------------------------------------------------------
-
-# Visual newline placeholder used when pasted text is re-injected into
-# readline's editing buffer.  Actual \n is restored before dispatch.
-_PASTE_NL = " ↵ "
-
-
-def _read_paste_buffered(prompt: str) -> str:
-    """Read one logical message from stdin, accumulating multiline pastes.
-
-    Root cause of the fragmentation bug: Python's ``BufferedReader`` reads
-    the TTY kernel buffer in 8 KB chunks on the first ``readline()`` call,
-    draining the kernel fd.  Subsequent ``select()`` calls on that fd then
-    report "not ready" even though lines 3..N are sitting in Python's own
-    internal buffer — invisible to ``select``.
-
-    Fix: after ``input()`` returns line 1, temporarily set the raw fd to
-    ``O_NONBLOCK`` and drain with ``os.read()`` directly, bypassing all
-    Python IO buffering layers.  ``BlockingIOError`` signals that the kernel
-    buffer is empty — i.e. the paste is fully consumed.
-
-    When a paste is detected the full text is re-injected into readline's
-    editing buffer (with ↵ as a visual newline placeholder) so the user can
-    review and optionally edit before pressing Enter to confirm.  The ↵
-    markers are then restored to real newlines before the message is
-    dispatched to the agent.
-
-    Normal single-line typing: non-blocking ``os.read()`` raises
-    ``BlockingIOError`` immediately → zero perceptible delay.
-    """
-    raw = input(prompt)  # readline integration preserved (↑/↓ history, ANSI)
-    fd = sys.stdin.fileno()
-    old_fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-    fcntl.fcntl(fd, fcntl.F_SETFL, old_fl | os.O_NONBLOCK)
-    buf = b""
-    try:
-        while True:
-            try:
-                chunk = os.read(fd, 65536)
-                if not chunk:
-                    break
-                buf += chunk
-            except BlockingIOError:
-                break
-    finally:
-        fcntl.fcntl(fd, fcntl.F_SETFL, old_fl)
-    if not buf:
-        return raw
-    text = buf.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
-    extra = text.split("\n")
-    if extra and extra[-1] == "":  # drop trailing empty element from trailing \n
-        extra.pop()
-    full_text = "\n".join([raw] + extra)
-    # Replace newlines with the visual placeholder so readline sees a single
-    # editable line (actual \n would be treated as "submit" by readline).
-    display = full_text.replace("\n", _PASTE_NL)
-    n_lines = full_text.count("\n") + 1
-    # Detect terminal width for ANSI erasure (0 = non-TTY/unknown → skip ANSI).
-    _tty = sys.stdout.isatty()
-    try:
-        term_cols = os.get_terminal_size().columns if _tty else 0
-    except OSError:
-        term_cols = 0
-
-    # Erase the first readline echo ("› line one") so it does not appear again
-    # later when user_block() prints the final clean display.
-    # Strip ANSI colour codes from prompt to get its visual display width.
-    if term_cols > 0:
-        prompt_vis = re.sub(r"\x1b\[[0-9;]*m", "", prompt)
-        first_rows = max(1, (len(prompt_vis) + len(raw) + term_cols - 1) // term_cols)
-        sys.stdout.write(f"\033[{first_rows}A\033[J")
-        sys.stdout.flush()
-
-    hint = f"{T.MUTED}  [↵ {n_lines} lignes collées · modifier si besoin puis Entrée pour envoyer]{T.RESET}"
-    print(hint)
-
-    def _pre_hook() -> None:
-        readline.insert_text(display)
-        readline.redisplay()
-
-    readline.set_pre_input_hook(_pre_hook)
-    try:
-        reviewed = input(prompt)
-    finally:
-        readline.set_pre_input_hook(None)
-
-    # Erase hint line + review input line(s) — user_block() will be the only display.
-    # After Enter: cursor is 1 row below the last review row.
-    # Hint is 1 row above the first review row.
-    # Total rows to go up: review_rows + 1 (the 1 is for the hint row).
-    if term_cols > 0:
-        prompt_vis = re.sub(r"\x1b\[[0-9;]*m", "", prompt)
-        review_rows = max(1, (len(prompt_vis) + len(display) + term_cols - 1) // term_cols)
-        sys.stdout.write(f"\033[{review_rows + 1}A\033[J")
-        sys.stdout.flush()
-
-    # Restore real newlines from the visual placeholders.
-    return reviewed.replace(_PASTE_NL, "\n")
 
 
 def start() -> None:
@@ -867,7 +925,8 @@ def start() -> None:
 
     while True:
         try:
-            raw = _read_paste_buffered(T.prompt_line(_get_alias()))
+            # input() uses readline internally, handles multiline paste natively
+            raw = input(T.prompt_line(_get_alias()))
             _ctrl_c_count[0] = 0
         except KeyboardInterrupt:
             _ctrl_c_count[0] += 1

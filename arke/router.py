@@ -284,12 +284,11 @@ def _single_step(tool: str, intention: str, context: dict[str, Any], args: dict[
             arguments={"db": db, "query": query, "params": args.get("params", ())},
         )
     if tool == "mcp":
-        service = args.get("service", "default")
-        request = args.get("request", intention.strip())
+        # Pass ALL agent-provided args directly — _exec_mcp() expects _server/tool_name/tool_args
         return Step(
             id="step_1",
             tool="mcp",
-            arguments={"service": service, "request": request},
+            arguments=args,
             validation=Validation(type="return_code", expected=0),
         )
     # llm fallback

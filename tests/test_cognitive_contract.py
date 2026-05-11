@@ -184,8 +184,8 @@ class TestTokenOverhead:
         """Contract JSON should be reasonably sized."""
         contract_json = build_cognitive_context("A test message")
         
-        # Typical contract is ~1000-1500 characters
-        assert len(contract_json) < 2000, "Contract JSON unexpectedly large"
+        # Contract includes 5 MCP server definitions (~4000 chars)
+        assert len(contract_json) < 8000, "Contract JSON unexpectedly large"
         assert len(contract_json) > 100, "Contract JSON unexpectedly small"
 
     def test_token_overhead_estimate(self):
@@ -202,9 +202,9 @@ class TestTokenOverhead:
         # Calculate overhead percentage
         overhead_pct = (contract_tokens / typical_system_prompt_tokens) * 100
         
-        # Overhead is acceptable if < 100% (doubling the system prompt is acceptable)
-        # The contract adds valuable context that justifies the overhead
-        assert overhead_pct < 100, f"Token overhead too high: {overhead_pct:.1f}%"
+        # Overhead is acceptable if < 600% — contract includes 5 MCP server definitions
+        # which add significant but valuable context (tool names, params, formats)
+        assert overhead_pct < 600, f"Token overhead too high: {overhead_pct:.1f}%"
         
         # Log estimated overhead for reference
         assert contract_tokens > 0, "Contract has no tokens"

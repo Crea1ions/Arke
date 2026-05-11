@@ -1,0 +1,27 @@
+# Configuration des serveurs MCP pour Arke
+
+[web_search]
+enabled = true
+command = "python"
+args = ["arke/interfaces/mcp_servers/web_search.py", "--stdio"]
+timeout = 30
+
+[rss_reader]
+enabled = true
+command = "python"
+args = ["arke/interfaces/mcp_servers/rss_reader.py", "--stdio"]
+timeout = 20
+
+[calculator]
+enabled = true
+command = "python"
+args = ["arke/interfaces/mcp_servers/calculator.py", "--stdio"]
+timeout = 10
+
+[github]
+enabled = true
+command = "python"
+args = ["arke/interfaces/mcp_servers/github.py", "--stdio"]
+timeout = 30
+# Token optionnel (rate limit 60/h sans token)
+# environment = { "GITHUB_TOKEN" = "votre_token_ici" }

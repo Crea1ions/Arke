@@ -51,6 +51,20 @@ The agent is cognition.
 | **Telegram Interface**         | Optional transport layer                                       |
 
 ---
+### MCP Servers (External Tools)
+
+Arke includes four local MCP servers as **last resort** tools:
+
+| Server | Description | Use Case |
+|--------|-------------|----------|
+| `web_search` | DuckDuckGo search | Documentation, news, fact-checking |
+| `calculator` | Math & unit conversions | Arithmetic, unit conversion |
+| `rss_reader` | RSS/Atom feed reader | Blog monitoring, news aggregation |
+| `github` | GitHub API access | Repository search, README retrieval |
+
+These follow the cognitive hierarchy: **simplest-first, local-first, MCP-last**.
+
+---
 
 # 🧠 Cognitive Model
 
@@ -303,6 +317,10 @@ arke run "analyze nginx logs"
 # Telegram interface
 arke --telegram
 ```
+pip install -e .
+
+# Install MCP dependencies (optional)
+pip install httpx beautifulsoup4 feedparser
 
 → Full setup guide: `SETUP.md`
 

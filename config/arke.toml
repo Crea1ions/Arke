@@ -84,3 +84,45 @@ Tu es Arke, un agent cognitif autonome local-first.
 
 Réponds en français, de façon concise. Pour les tâches techniques, propose une action concrète et exécute-la si l'utilisateur confirme.
 """
+
+# ============================================================
+# Serveurs MCP locaux (dernier recours, après CLI/FS/SQLite/scripts)
+# ============================================================
+
+[mcp_servers]
+
+[mcp_servers.web_search]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/web_search.py", "--stdio"]
+timeout = 30
+description = "Recherche web sans clé API via DuckDuckGo"
+
+[mcp_servers.calculator]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/calculator.py", "--stdio"]
+timeout = 10
+description = "Calculs mathématiques et conversions d'unités"
+
+[mcp_servers.rss_reader]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/rss_reader.py", "--stdio"]
+timeout = 20
+description = "Lecture de flux RSS/Atom pour veille informationnelle"
+
+[mcp_servers.github]
+enabled = true
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/github.py", "--stdio"]
+timeout = 30
+description = "API GitHub (recherche, dépôts, README)"
+
+# freeweb-mcp - Recherche web robuste (multi-couches)
+[mcp_servers.freeweb]
+enabled = true
+command = "npx"
+args = ["-y", "freeweb-mcp@latest"]
+timeout = 60
+description = "Recherche web avec fallback (Yahoo, Bing, etc.)"

@@ -305,12 +305,120 @@ def _exec_memory_search(step: Step) -> dict[str, Any]:
 
 
 def _exec_mcp(step: Step) -> dict[str, Any]:
-    """Call an MCP tool via the ContextForge federated endpoint.
+    """Execute MCP call - supports both legacy ContextForge and individual servers"""
+    import subprocess
+    import json
+    import tomllib
+    from pathlib import Path
+    
+    args = step.arguments
+    
+    # Initialize variables before use
+    server_name = args.get("_server") or args.get("server")
+    tool_name = args.get("tool_name") or args.get("tool")
 
-    When ``tool_name`` is not explicitly set in step arguments, the
-    client first lists available tools and picks the first match based
-    on the ``intention`` keyword.
-    """
+    # Support du format {service, action, params} (utilisé par l'agent)
+    if not server_name and not tool_name:
+        service = args.get("service")
+        action = args.get("action")
+        params = args.get("params", {})
+        
+        if service and action:
+            # Mapping service/action → server/tool
+            service_tool_map = {
+                ("freeweb", "search"): ("freeweb", "web_search"),
+                ("calculator", "calculate"): ("calculator", "calculate"),
+                ("rss_reader", "read"): ("rss_reader", "read_rss"),
+                ("github", "search"): ("github", "github_search"),
+            }
+            
+            mapped = service_tool_map.get((service, action))
+            if mapped:
+                server_name, tool_name = mapped
+                # params devient tool_args
+                args["tool_args"] = params
+                args["_server"] = server_name
+                args["tool_name"] = tool_name
+
+    # Now server_name and tool_name are set from args
+    
+    # Mode 1: Serveur MCP individuel (freeweb, calculator, etc.)
+    if server_name and tool_name:
+        config_path = Path(__file__).parent.parent / "config" / "arke.toml"
+        try:
+            with open(config_path, "rb") as f:
+                config = tomllib.load(f)
+                servers = config.get("mcp_servers", {})
+                
+                if server_name not in servers:
+                    return {
+                        "return_code": 1,
+                        "stdout": "",
+                        "stderr": f"MCP: serveur inconnu: {server_name}. Disponibles: {list(servers.keys())}"
+                    }
+                
+                cfg = servers[server_name]
+                if not cfg.get("enabled", True):
+                    return {
+                        "return_code": 1,
+                        "stdout": "",
+                        "stderr": f"MCP: serveur désactivé: {server_name}"
+                    }
+                
+                request = {
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": tool_name, "arguments": args.get("tool_args", {})},
+                    "id": 1
+                }
+                
+                proc = subprocess.run(
+                    [cfg["command"]] + cfg.get("args", []),
+                    input=json.dumps(request),
+                    capture_output=True,
+                    text=True,
+                    timeout=cfg.get("timeout", 30)
+                )
+                
+                if proc.returncode != 0:
+                    return {
+                        "return_code": 1,
+                        "stdout": "",
+                        "stderr": f"MCP {server_name} error: {proc.stderr[:500]}"
+                    }
+                
+                response = json.loads(proc.stdout)
+                result_content = response.get("result", {}).get("content", [])
+                
+                if result_content:
+                    result_text = result_content[0].get("text", "{}")
+                    try:
+                        result_json = json.loads(result_text)
+                        return {
+                            "return_code": 0,
+                            "stdout": json.dumps(result_json, indent=2),
+                            "stderr": ""
+                        }
+                    except:
+                        return {
+                            "return_code": 0,
+                            "stdout": result_text,
+                            "stderr": ""
+                        }
+                
+                return {
+                    "return_code": 1,
+                    "stdout": "",
+                    "stderr": "MCP: réponse vide"
+                }
+        except Exception as e:
+            return {
+                "return_code": 1,
+                "stdout": "",
+                "stderr": f"MCP error: {str(e)}"
+            }
+    
+    # Mode 2: Legacy ContextForge
     from arke.interfaces.mcp_client import McpClient, McpUnavailableError
 
     try:
@@ -319,7 +427,6 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
         tool_args: dict = step.arguments.get("tool_args", {})
 
         if tool_name is None:
-            # Auto-select: list tools and pick first available
             tools = client.list_tools()
             if not tools:
                 return {
@@ -328,23 +435,18 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
                     "stderr": "MCP: no tools available from ContextForge",
                 }
             tool_name = tools[0]["name"]
-
+        
         result = client.call_tool(tool_name, tool_args)
-        content_blocks = result.get("content", [])
-        text = "\n".join(
-            block.get("text", "") for block in content_blocks if block.get("type") == "text"
-        )
-        is_error = result.get("isError", False)
         return {
-            "return_code": 1 if is_error else 0,
-            "stdout": text,
-            "stderr": text if is_error else "",
+            "return_code": 0,
+            "stdout": json.dumps(result, indent=2),
+            "stderr": ""
         }
-    except McpUnavailableError as exc:
+    except McpUnavailableError as e:
         return {
             "return_code": 1,
             "stdout": "",
-            "stderr": f"MCP indisponible : {exc}",
+            "stderr": f"MCP unavailable: {e}",
         }
 
 

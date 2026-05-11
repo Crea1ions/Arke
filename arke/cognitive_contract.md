@@ -40,6 +40,162 @@ Le système exécute. Tu décides.
 
 > MCP est la périphérie. Le local est le centre.
 
+## Serveurs MCP disponibles (5 serveurs, 13 outils)
+
+Ces outils ne doivent être utilisés **qu'après** avoir vérifié que les niveaux 0-3 sont insuffisants.
+
+### Serveurs disponibles
+
+| Serveur | Type | Description | Timeout | Statut |
+|---------|------|-------------|---------|--------|
+| `web_search` | Python | Recherche web (DuckDuckGo) | 30s | ✅ Actif |
+| `calculator` | Python | Calculs mathématiques + conversions | 10s | ✅ Actif |
+| `rss_reader` | Python | Lecteur RSS/Atom | 20s | ✅ Actif |
+| `github` | Python | API GitHub (repos, users, README) | 30s | ✅ Actif |
+| `freeweb` | npx | Recherche web multi-source (Yahoo, Bing) | 60s | ✅ Actif |
+
+### Les 13 outils individuels
+
+#### web_search (2 outils)
+- **`web_search`** — Recherche web via DuckDuckGo
+  - Paramètres: `{"query": str, "max_results": int (défaut=5)}`
+  - Retour: liste de résultats `[{"title": "...", "url": "...", "snippet": "..."}]`
+
+- **`fetch_page`** — Récupère le contenu complet d'une page
+  - Paramètres: `{"url": str, "max_length": int (défaut=5000)}`
+  - Retour: `{"url": "...", "content": "...", "title": "..."}`
+
+#### calculator (4 outils)
+- **`calculate`** — Évalue une expression mathématique
+  - Paramètres: `{"expression": str}`
+  - Retour: `{"result": float, "expression": "..."}`
+
+- **`convert_units`** — Convertit une valeur d'une unité à l'autre
+  - Paramètres: `{"value": float, "from_unit": str, "to_unit": str}`
+  - Retour: `{"converted_value": float, "from_unit": "...", "to_unit": "..."}`
+
+- **`random_number`** — Génère un nombre aléatoire
+  - Paramètres: `{"min": float, "max": float, "integer": bool (défaut=false)}`
+  - Retour: `{"value": float}`
+
+- **`statistics`** — Calcule statistiques sur une liste
+  - Paramètres: `{"numbers": list[float], "operation": str (mean|median|sum|min|max|variance|stddev)}`
+  - Retour: `{"operation": "...", "result": float}`
+
+#### rss_reader (3 outils)
+- **`read_rss`** — Lit un flux RSS/Atom
+  - Paramètres: `{"url": str, "limit": int (défaut=10)}`
+  - Retour: `[{"title": "...", "link": "...", "published": "...", "summary": "..."}]`
+
+- **`discover_rss`** — Découvre les flux RSS/Atom sur un site
+  - Paramètres: `{"url": str}`
+  - Retour: `[{"title": "...", "feed_url": "..."}]`
+
+- **`fetch_full_content`** — Récupère le contenu complet d'un article RSS
+  - Paramètres: `{"url": str}`
+  - Retour: `{"title": "...", "content": "...", "published": "..."}`
+
+#### github (4 outils)
+- **`github_repo`** — Récupère les informations d'un dépôt GitHub
+  - Paramètres: `{"owner": str, "repo": str}`
+  - Retour: `{"name": "...", "description": "...", "url": "...", "stars": int, "language": "..."}`
+
+- **`github_search`** — Recherche des dépôts GitHub
+  - Paramètres: `{"query": str, "max_results": int (défaut=5), "sort": str (défaut=stars)}`
+  - Retour: `[{"name": "...", "url": "...", "stars": int, "description": "..."}]`
+
+- **`github_readme`** — Récupère le README d'un dépôt
+  - Paramètres: `{"owner": str, "repo": str, "branch": str (défaut=HEAD)}`
+  - Retour: `{"content": "...", "format": "markdown"}`
+
+- **`github_user`** — Récupère les infos d'un utilisateur GitHub
+  - Paramètres: `{"username": str}`
+  - Retour: `{"username": "...", "name": "...", "bio": "...", "public_repos": int, "followers": int}`
+
+### Format d'appel au LLM (2 formats supportés)
+
+#### Format 1 : Recommandé (serveurs individuels Python)
+
+Utilise ce format pour appeler les 4 serveurs Python (web_search, calculator, rss_reader, github).
+
+**Balises Markdown :**
+```
+[OUTIL: mcp]
+[ARGS: {"_server": "web_search", "tool_name": "web_search", "tool_args": {"query": "agents IA autonomes", "max_results": 5}}]
+```
+
+**Exemple complet :**
+```
+Je vais chercher des informations sur les agents autonomes.
+[OUTIL: mcp]
+[ARGS: {"_server": "web_search", "tool_name": "web_search", "tool_args": {"query": "agents autonomes IA 2026", "max_results": 3}}]
+```
+
+**Variantes acceptées :**
+- `_server` ou `server` (nom du serveur MCP)
+- `tool_name` ou `tool` (nom de l'outil)
+- `tool_args` ou `args` (arguments de l'outil)
+
+#### Format 2 : Legacy (fallback ContextForge)
+
+Pour compatibilité, format ancien encore supporté :
+
+```
+[OUTIL: mcp]
+[ARGS: {"service": "freeweb", "action": "search", "params": {"query": "...", "max_results": 5}}]
+```
+
+**Mapping service/action automatique :**
+- `("freeweb", "search")` → `web_search:web_search`
+- `("calculator", "calculate")` → `calculator:calculate`
+- `("rss_reader", "read")` → `rss_reader:read_rss`
+- `("github", "search")` → `github:github_search`
+
+### Exemples concrets
+
+**1. Recherche web (web_search)**
+```
+[OUTIL: mcp]
+[ARGS: {"_server": "web_search", "tool_name": "web_search", "tool_args": {"query": "machine learning 2026", "max_results": 5}}]
+```
+
+**2. Calcul mathématique (calculator)**
+```
+[OUTIL: mcp]
+[ARGS: {"_server": "calculator", "tool_name": "calculate", "tool_args": {"expression": "25% of 1000"}}]
+```
+
+**3. Lecture RSS (rss_reader)**
+```
+[OUTIL: mcp]
+[ARGS: {"_server": "rss_reader", "tool_name": "read_rss", "tool_args": {"url": "https://simonwillison.net/atom.xml", "limit": 3}}]
+```
+
+**4. Recherche GitHub (github)**
+```
+[OUTIL: mcp]
+[ARGS: {"_server": "github", "tool_name": "github_search", "tool_args": {"query": "arke autonomous agent", "max_results": 3, "sort": "stars"}}]
+```
+
+### Hiérarchie MCP dans le flux de décision
+
+```
+0. Réflexion directe (pas d'outil)
+   ↓ (Si suffisant → répondre)
+1. Outils locaux : CLI, FS, SQLite, mémoire FTS5
+   ↓ (Si suffisant → répondre)
+2. Skills locaux (patterns appris ≥5 utilisations)
+   ↓ (Si suffisant → répondre)
+3. Recherche vectorielle locale / LLM interne
+   ↓ (Si suffisant → répondre)
+4. MCP externe (web_search, calculator, rss_reader, github)
+   ↓ (Dernier recours)
+```
+
+**Règle d'arrêt :** Stop at the first sufficient level.
+
+**Rappel :** MCP est la **périphérie du cerveau**. Le local est le **centre**. Vérifie d'abord si la réponse existe en mémoire locale (SQLite session.db) ou via CLI avant d'appeler un MCP.
+
 ---
 
 ## Chemins essentiels
