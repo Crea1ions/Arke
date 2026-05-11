@@ -100,7 +100,7 @@ Only the agent decides.
 
 # 🏗️ Execution Pipeline
 
-[User Input]
+`User Input`
 
 ↓
 
