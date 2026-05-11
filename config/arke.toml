@@ -119,10 +119,10 @@ args = ["arke/interfaces/mcp_servers/github.py", "--stdio"]
 timeout = 30
 description = "API GitHub (recherche, dépôts, README)"
 
-# freeweb-mcp - Recherche web robuste (multi-couches)
+# freeweb - Recherche actualités (DuckDuckGo News) + fetch de page
 [mcp_servers.freeweb]
 enabled = true
-command = "npx"
-args = ["-y", "freeweb-mcp@latest"]
-timeout = 60
-description = "Recherche web avec fallback (Yahoo, Bing, etc.)"
+command = ".venv/bin/python"
+args = ["arke/interfaces/mcp_servers/freeweb.py", "--stdio"]
+timeout = 30
+description = "Recherche d'actualités DuckDuckGo News + fetch de page web"

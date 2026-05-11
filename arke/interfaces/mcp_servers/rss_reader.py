@@ -24,8 +24,19 @@ class RSSReaderMCP:
     async def read_feed(self, url: str, limit: int = 10) -> Dict:
         """Lit un flux RSS/Atom et retourne les entrées"""
         try:
-            feed = feedparser.parse(url)
-            
+            # Fetch via httpx first — handles SSL, redirects and user-agent issues
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; ArkeBot/1.0; +feedreader)"}
+            response = await self.client.get(url, headers=headers)
+
+            if response.status_code >= 400:
+                return {"success": False, "error": f"HTTP {response.status_code} — URL introuvable: {url}"}
+
+            content_type = response.headers.get("content-type", "")
+            if "text/html" in content_type and "xml" not in content_type:
+                return {"success": False, "error": f"URL retourne du HTML, pas un flux RSS/Atom (content-type: {content_type})"}
+
+            feed = feedparser.parse(response.content)
+
             if feed.bozo and not feed.entries:
                 return {"success": False, "error": str(feed.bozo_exception)}
             

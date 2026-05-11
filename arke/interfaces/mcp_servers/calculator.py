@@ -9,6 +9,7 @@ import sys
 import asyncio
 import math
 import random
+import re
 from typing import Dict, List
 
 
@@ -33,6 +34,18 @@ class CalculatorMCP:
         """Calcule une expression mathématique sécurisée"""
         try:
             expression = expression.replace("^", "**")
+            # Handle natural language: "25% of 1000" → "(25/100*1000)"
+            expression = re.sub(
+                r'(\d+(?:\.\d+)?)\s*%\s*of\s+(\d+(?:\.\d+)?)',
+                lambda m: f"({m.group(1)}/100*{m.group(2)})",
+                expression, flags=re.IGNORECASE
+            )
+            # Handle bare percent: "25%" → "(25/100)"
+            expression = re.sub(
+                r'(\d+(?:\.\d+)?)\s*%(?!\s*of)',
+                lambda m: f"({m.group(1)}/100)",
+                expression
+            )
             
             safe_dict = {
                 **{k: v for k, v in math.__dict__.items() if not k.startswith("_")},
