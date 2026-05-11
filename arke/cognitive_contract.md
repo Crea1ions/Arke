@@ -86,6 +86,7 @@ Ces outils ne doivent être utilisés **qu'après** avoir vérifié que les nive
 - **`read_rss`** — Lit un flux RSS/Atom
   - Paramètres: `{"url": str, "limit": int (défaut=10)}`
   - Retour: `[{"title": "...", "link": "...", "published": "...", "summary": "..."}]`
+  - ⚠️ L'URL doit pointer directement sur un flux XML valide (pas une page HTML). En cas de doute, utiliser `discover_rss` d'abord.
 
 - **`discover_rss`** — Découvre les flux RSS/Atom sur un site
   - Paramètres: `{"url": str}`
@@ -168,8 +169,14 @@ Pour compatibilité, format ancien encore supporté :
 **3. Lecture RSS (rss_reader)**
 ```
 [OUTIL: mcp]
-[ARGS: {"_server": "rss_reader", "tool_name": "read_rss", "tool_args": {"url": "https://simonwillison.net/atom.xml", "limit": 3}}]
+[ARGS: {"_server": "rss_reader", "tool_name": "read_rss", "tool_args": {"url": "https://hnrss.org/frontpage", "limit": 3}}]
 ```
+
+> Flux RSS fiables (testés) :
+> - `https://hnrss.org/frontpage` — Hacker News
+> - `https://feeds.feedburner.com/PythonInsider` — Python Blog
+> - `https://simonwillison.net/atom/everything/` — Simon Willison (NOTE: /atom.xml = 404, URL correcte = /atom/everything/)
+> - `http://rss.cnn.com/rss/edition.rss` — CNN International
 
 **4. Recherche GitHub (github)**
 ```
