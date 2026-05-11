@@ -758,6 +758,31 @@ def start() -> None:
     _social_orchestrator.start()
     _cancel_extraction = [None]  # type: list[threading.Event | None]
 
+    # Initialize workspace cache (WVS)
+    try:
+        import tomllib
+        from pathlib import Path
+        from arke.wvs.cache import WorkspaceCache
+        
+        # Load config to get workspace root
+        config_path = Path(__file__).parent.parent / "config" / "arke.toml"
+        try:
+            with open(config_path, "rb") as fh:
+                config = tomllib.load(fh)
+        except Exception:
+            config = {}
+        
+        wcu_root = config.get("workspace", {}).get("wcu_root", "arke-workspace/WCU")
+        
+        # Convert to absolute path if relative
+        if not Path(wcu_root).is_absolute():
+            wcu_root = Path(__file__).parent.parent / wcu_root
+        
+        WorkspaceCache.initialize(Path(wcu_root))
+    except Exception as e:
+        log.warning(f"workspace_cache_init_failed: {e}")
+        # Non-fatal; WVS commands will handle missing cache gracefully
+
     def _run_task(result: RouteResult) -> None:
         """Execute a task intention through the orchestrator with threaded step display."""
         import arke.orchestrator as orch
@@ -1063,6 +1088,18 @@ def start() -> None:
                 _social_orchestrator.resume()
                 print(f"{T.MUTED}Initiatives réactivées.{T.RESET}")
 
+            # Workspace View System (WVS) commands
+            elif cmd.startswith("/show_"):
+                from arke.commands.workspace_commands import get_workspace_command_handler
+                handler = get_workspace_command_handler(cmd)
+                if handler:
+                    try:
+                        handler()
+                    except Exception as e:
+                        print(f"{T.ERROR}Workspace command error: {e}{T.RESET}")
+                else:
+                    print(f"{T.ERROR}Unknown workspace command: {cmd}{T.RESET}")
+
             # Track slash command in metrics
             get_metrics_instance().increment_slash_or_model()
             continue
@@ -1259,7 +1296,10 @@ def _print_help() -> None:
         f"{T.ACCENT}Commandes slash{T.RESET}",
         "",
     ]
+    # Display commands, but filter out /show_* sub-commands (shown only in /show_workspace)
     for cmd, desc in SLASH_COMMANDS.items():
+        if cmd.startswith("/show_") and cmd != "/show_workspace":
+            continue  # Skip sub-commands; they're shown in /show_workspace output
         lines.append(f"  {T.BOLD}{cmd:<10}{T.RESET} {T.MUTED}{desc}{T.RESET}")
     lines.append("")
     lines.append(f"{T.ACCENT}Alias de modèles{T.RESET}")

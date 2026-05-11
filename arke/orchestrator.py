@@ -1,10 +1,15 @@
 """Orchestrator — converts user intention into an executed Task.
 
 Wires together: router → tool executors → gates → memory logging.
+
+WORKSPACE INTEGRATION: orchestrator is the sole authority for PUW (Passive User Workspace)
+filesystem I/O. workspace.py provides orchestrator-only abstraction layer.
+LLM never sees workspace structure or paths.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -12,6 +17,7 @@ import structlog
 from arke import router
 from arke import gates
 from arke.task_graph import Step, StepStatus, Task
+from arke import workspace  # PUW integration (orchestrator-only)
 
 log = structlog.get_logger()
 
@@ -21,12 +27,16 @@ def run(intention: str, context: dict[str, Any] | None = None) -> Task:
 
     Args:
         intention: Raw user intention string.
-        context: Optional execution context (project_path, log_file, …).
+        context: Optional execution context (project_path, log_file, wcu_root, …).
 
     Returns:
         The completed ``Task`` with all steps populated and status set.
     """
     ctx = context or {}
+    
+    # Initialize workspace on first run (orchestrator-only, never exposed to LLM)
+    _initialize_workspace_once(ctx)
+    
     task = router.plan(intention, ctx)
 
     log.info("task.start", task_id=task.id, description=task.description)
@@ -62,6 +72,38 @@ def run(intention: str, context: dict[str, Any] | None = None) -> Task:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+# Workspace initialization flag (orchestrator-only)
+_workspace_initialized = False
+
+
+def _initialize_workspace_once(ctx: dict[str, Any]) -> None:
+    """Initialize workspace manager if not already done (orchestrator-only).
+    
+    CRITICAL: This is orchestrator-internal. Never expose workspace to LLM.
+    """
+    global _workspace_initialized
+    if _workspace_initialized:
+        return
+    
+    try:
+        # Get WCU root from context or use default
+        wcu_root = ctx.get("wcu_root")
+        if not wcu_root:
+            # Default to arke-workspace/WCU in project root
+            from pathlib import Path
+            project_root = Path(__file__).parent.parent
+            wcu_root = project_root / "arke-workspace" / "WCU"
+        
+        wcu_root = Path(wcu_root)
+        
+        # Initialize workspace manager
+        workspace.initialize_workspace(wcu_root)
+        _workspace_initialized = True
+        log.info("workspace.initialized", wcu_root=str(wcu_root))
+    except Exception as e:
+        log.warning("workspace.initialization.failed", error=str(e))
+        # Don't fail the whole orchestrator, just warn
 
 
 def _wait_dependencies(step: Step, outputs: dict[str, Any]) -> None:

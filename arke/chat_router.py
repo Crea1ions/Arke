@@ -53,6 +53,13 @@ SLASH_COMMANDS: dict[str, str] = {
     "/drop-thread":        "Abandonne un fil cognitif (/drop-thread <id>)",
     "/pause-initiatives":  "Suspend les initiatives cognitive (/pause-initiatives [heures])",
     "/resume-initiatives": "Réactive les initiatives cognitives",
+    # Workspace View System (WVS) commands — filtered from /help, only shown in /show_workspace
+    "/show_workspace":     "Visualize entire workspace structure",
+    "/show_mobile_notes":  "Details of mobile-notes (capture layer)",
+    "/show_code":          "Details of code artifacts",
+    "/show_projects":      "Details of projects/TEMP (structuration layer)",
+    "/show_shared":        "Details of shared restitution outputs",
+    "/show_archive":       "Archive contents",
 }
 
 # ---------------------------------------------------------------------------
