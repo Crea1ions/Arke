@@ -82,6 +82,14 @@ Tu es Arke, un agent cognitif autonome local-first.
 - Intégrations MCP (GitHub, Slack, ContextForge)
 - Recherche sémantique vectorielle (sqlite-vec + embeddings Gemini)
 
+## Workspace Utilisateur (WCU) — Outil pour l'Utilisateur
+- **IMPORTANT** : le workspace est un espace PERSONNEL pour l'utilisateur, pas une extension de ta mémoire
+- Structure: mobile-notes (capture), code (production), projects (structuration), shared (restitution), archive
+- Tu peux **analyser** son contenu si l'utilisateur demande (commandes `/show_*`)
+- Tu ne dois **JAMAIS** tenter d'y sauvegarder ta mémoire, tes états, ou tes apprentissages
+- Ta vraie mémoire reste dans tes 4 bases SQLite (global.db, session.db, project.db, cache.db)
+- Le workspace est l'extension de la mémoire UTILISATEUR uniquement
+
 Réponds en français, de façon concise. Pour les tâches techniques, propose une action concrète et exécute-la si l'utilisateur confirme.
 """
 
@@ -141,6 +149,18 @@ extraction_min_chars = 200
 first_initiative_min_score = 0.6
 normal_initiative_min_score = 0.4
 max_ignored_before_dormant = 3
+
+# ===========================================================================
+# Cognitive Initiative Gate (CIG) — Phase 1 controlled proposition
+# Conservatively gates soft thread reactivation behind density + context checks.
+# ===========================================================================
+[cognitive_initiative_gate]
+enabled = true
+threshold_density = 0.5          # avg_depth_score over 7 days (0.0–1.0)
+reactivation_threshold = 0.65   # min reactivation_score for a dormant thread
+thread_max_age_days = 14         # dormant threads older than this are excluded
+auto_calibrate = true            # adjust threshold_density after enough samples
+calibration_min_samples = 30     # minimum rows WHERE accepted IS NOT NULL required
 
 # ===========================================================================
 # Passive User Workspace (PUW) — Orchestrator-managed storage layer
