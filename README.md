@@ -1,39 +1,57 @@
 # 🏛️ Arke
 
-> **Agent decides · System executes**
->
-> *“The system must never think in place of the agent.”*
+> **Agent decides · System executes · Interaction persists**  
+> *"The system must never think in place of the agent."*
 
-Arke is a **deterministic and observable execution system** for autonomous agents built around one central principle:
-
-> **All cognition is centralized inside the LLM agent.**
->
-> The system never interprets, never chooses, and never decides in its place.
+Arke is a **local-first autonomous agent architecture** where the LLM is the sole decision-maker. It does not interpret intent or select tools on behalf of the agent. It provides a unified endpoint, deterministic orchestration, SQLite-based memory, telemetry, and sandboxed execution around a single cognitive core designed for continuous interaction over time.
 
 ---
 
-# 🎯 Vision
+# 🎯 The Problem Arke Solves
 
-Most AI agent systems slowly drift toward hybrid cognition:
+Most AI agent systems gradually converge toward hybrid cognition:
+- routers silently become decision layers
+- orchestration accumulates implicit heuristics
+- execution layers begin to interpret intent
+- the system starts “thinking” instead of strictly executing
+- agent autonomy becomes partially illusory
 
-* routers become hidden decision engines
-* orchestration layers start interpreting intent
-* heuristics accumulate over time
-* execution pipelines become opaque
+Arke enforces a strict separation that most systems blur over time:
 
-Arke exists to enforce a strict separation:
-
-| Layer      | Responsibility                         |
-| ---------- | -------------------------------------- |
-| **Agent**  | Understands, reasons, chooses, decides |
-| **System** | Executes, validates, isolates, traces  |
+| Layer     | Responsibility                         |
+|----------|----------------------------------------|
+| Agent     | Understands, reasons, decides          |
+| System    | Executes, validates, isolates, traces  |
 
 ```text
 User → Agent (SOLE DECIDER) → System (EXECUTION ONLY)
-```
+
 
 The system is infrastructure.
 The agent is cognition.
+Nothing in between.
+
+---
+
+# 🧠 Cognitive Dimension
+
+Beyond execution, Arke introduces a structural property:
+**temporal continuity of interaction.**
+
+It does not simulate personality. It does not model human behavior.
+It maintains persistent interaction state across time, allowing unfinished threads, ideas, and contextual signals to resurface when relevant.
+
+| Usage Density | Emergent Behavior                           |
+| ------------- | ------------------------------------------- |
+| Low           | Reactive assistant                          |
+| Medium        | Persistent memory and continuity            |
+| High          | Contextual reactivation and pattern linking |
+| Very High     | Collaborative cognitive interaction         |
+
+> Proactivity is not a mode. It is an emergent consequence of interaction density.
+
+No configuration modes. No relationship tiers.
+Only memory accumulation over time.
 
 ---
 
@@ -41,329 +59,253 @@ The agent is cognition.
 
 | Feature                        | Purpose                                                        |
 | ------------------------------ | -------------------------------------------------------------- |
-| **Unified Endpoint**           | Single interface to CLI, filesystem, SQLite, memory, APIs, MCP |
-| **Deterministic Orchestrator** | Passive execution engine with validation gates                 |
-| **SQLite Memory System**       | Local-first persistent memory (FTS5 + sqlite-vec)              |
-| **Sandbox Isolation**          | Bubblewrap-based secure execution                              |
-| **Skills System**              | Reusable deterministic and cognitive workflows                 |
-| **Anti-Drift Monitoring**      | Live tracking of cognitive invariants                          |
-| **Terminal-First Interface**   | Natural language REPL                                          |
-| **Telegram Interface**         | Optional transport layer                                       |
-
----
-### MCP Servers (External Tools)
-
-Arke includes four local MCP servers as **last resort** tools:
-
-| Server | Description | Use Case |
-|--------|-------------|----------|
-| `web_search` | DuckDuckGo search | Documentation, news, fact-checking |
-| `calculator` | Math & unit conversions | Arithmetic, unit conversion |
-| `rss_reader` | RSS/Atom feed reader | Blog monitoring, news aggregation |
-| `github` | GitHub API access | Repository search, README retrieval |
-
-These follow the cognitive hierarchy: **simplest-first, local-first, MCP-last**.
+| **Unified Endpoint**           | Single interface for CLI, filesystem, memory, APIs, MCP        |
+| **Deterministic Orchestrator** | Execution layer with strict validation gates                   |
+| **SQLite Memory System**       | Global / project / session / cache storage (FTS5 + sqlite-vec) |
+| **Sandbox Isolation**          | Secure execution via bubblewrap                                |
+| **Skills System**              | Detection of repeated patterns and reusable workflows          |
+| **Multi-Provider LLM Layer**   | Gemini, Claude, Mistral, OpenAI, Ollama                        |
+| **OpenTelemetry Integration**  | Full tracing of execution and cost                             |
+| **Terminal REPL**              | Natural language command interface                             |
+| **Telegram Interface**         | Optional transport layer (no business logic)                   |
 
 ---
 
 # 🧠 Cognitive Model
 
-Arke follows a strict cognitive hierarchy:
+Arke follows a strict layered reasoning model:
 
-```text
-0. Direct reasoning
-1. Local deterministic tools
-2. Local skills
-3. Semantic/vector search
+
+0. Direct reasoning (LLM)
+1. Local deterministic tools (CLI, FS)
+2. SQLite memory (FTS5 + vector search)
+3. Local skills
 4. External MCP services
-```
 
-Core mantra:
 
-```text
+Core principle:
+
+
 simplest-first
 local-first
 MCP-last
 
-Stop at the first sufficient level.
-```
+Stop at the first sufficient layer.
 
-The hierarchy is:
 
-* descriptive
-* cognitive
-* non-prescriptive
-
-The system never enforces it.
-
+The hierarchy is descriptive, not enforced.
 Only the agent decides.
 
 ---
 
-# 🏗️ Cognitive Execution Pipeline
+# 🏗️ Execution Pipeline
 
-```text
-User Input
-    ↓
-Conversation Context
-    ↓
-Cognitive Contract Injection
-    ↓
-Agent LLM (SOLE DECIDER)
-    ↓
-Tool Intent
-    ↓
-Unified Endpoint
-    ↓
-Deterministic Orchestrator
-    ↓
-Execution + Validation Gates
-    ↓
-Telemetry + Anti-Drift Metrics
-    ↓
-Response
+```mermaid
+graph TD
+    A[User Input] --> B[Conversation Context<br/>session.db]
+    B --> C[Agent LLM<br/>SOLE DECIDER]
+    C --> D[Tool Intent]
+    D --> E[Unified Endpoint]
+    E --> F[Deterministic Orchestrator]
+    F --> G[Validation Gates<br/>schema · filesystem · return codes]
+    G --> H[Sandbox Execution<br/>bubblewrap]
+    H --> I[Telemetry<br/>OpenTelemetry]
+    I --> J[Response]
+    J --> K[Memory Update<br/>skills + history]
+    K --> B
+
+    style C fill:#2d2d2d,stroke:#78c8ff,stroke-width:3px,color:#e0e0e0
+    style F fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style E fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style G fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style H fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style I fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style J fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style K fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style B fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+
+    linkStyle default stroke:#5a5a5a,stroke-width:1px
 ```
 
 ---
 
 # 🔐 Cognitive Invariants
 
-Arke enforces three non-negotiable invariants:
+Arke enforces three core invariants:
 
-```text
+
 system_never_interprets = true
 system_never_decides_tools = true
-system_never_executes_without_llm_intent = true
-```
+system_never_executes_without_agent_intent = true
 
-This means:
 
-❌ No implicit routing
-❌ No conversation/task classification
-❌ No autonomous retries
-❌ No hidden planners
-❌ No hybrid cognition
-❌ No execution without explicit agent intent
+This guarantees:
 
----
-
-# 🧰 Unified Endpoint
-
-The Unified Endpoint exposes system capabilities to the agent:
-
-* CLI
-* filesystem
-* SQLite
-* memory
-* skills
-* vector search
-* MCP
-* APIs
-
-Its role is only to:
-
-* normalize
-* expose
-* translate
-
-It never decides which tool to use.
-
----
-
-# ⚙️ Orchestrator
-
-The orchestrator is a passive execution engine.
-
-## Responsibilities
-
-* action execution
-* sandboxing
-* technical validation
-* telemetry
-* isolation
-* runtime error handling
-
-## Non-responsibilities
-
-* intent interpretation
-* tool selection
-* reasoning
-* planning
-* user classification
+* no implicit routing
+* no hidden planners
+* no autonomous decision layers
+* no execution without explicit agent intent
 
 ---
 
 # 🧠 Memory Architecture
 
-Arke uses multiple local SQLite databases:
-
-| Database     | Purpose                              |
-| ------------ | ------------------------------------ |
-| `global.db`  | global memory, skills, configuration |
-| `project.db` | project context                      |
-| `session.db` | conversational context               |
-| `cache.db`   | internal technical cache             |
+| Database     | Purpose                                 |
+| ------------ | --------------------------------------- |
+| `global.db`  | Preferences, skills, long-term patterns |
+| `project.db` | Project-specific context                |
+| `session.db` | Active conversation state               |
+| `cache.db`   | LLM cache and embeddings                |
 
 Memory strategy:
 
-* **FTS5** → exact search
-* **sqlite-vec** → semantic retrieval
-* **LLM** → only if memory is insufficient
+* **FTS5** → full-text search
+* **sqlite-vec** → semantic retrieval (< 5 ms on small corpora)
+* **LLM fallback** → only when retrieval is insufficient
 
+---
+```mermaid
+graph TD
+    G[global.db<br/>Skills · Patterns · Preferences] --> M[Memory Layer]
+    P[project.db<br/>Project Context · Documents] --> M
+    S[session.db<br/>Active State · Chat History] --> M
+    C[cache.db<br/>LLM Cache · Embeddings] --> M
+
+    M --> FTS[FTS5<br/>Full-text Search]
+    M --> VEC[sqlite-vec<br/>Semantic Retrieval<br/>< 5 ms]
+    M --> LLM[LLM Fallback<br/>Only if insufficient]
+
+    style G fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
+    style P fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
+    style S fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
+    style C fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
+    style M fill:#1a1a1a,stroke:#3a3a3a,stroke-width:1px,color:#808080
+    style FTS fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style VEC fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+    style LLM fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
+
+    linkStyle default stroke:#3a3a3a,stroke-width:1px
+```
 ---
 
 # 🧩 Skills System
 
-Arke supports two skill categories:
+Arke identifies repeated behavioral patterns and can abstract them into reusable workflows.
 
-| Type                     | Controlled By |
-| ------------------------ | ------------- |
-| **Deterministic Skills** | Orchestrator  |
-| **Cognitive Skills**     | Agent         |
+* Pattern detection over time
+* User-controlled activation
+* Reusable execution blocks
+* Automatic pruning of unused skills over time
 
-Deterministic skills execute directly.
-
-Cognitive skills structure workflows and context, but the agent always remains the decision-maker.
+The agent remains the sole decision-maker for skill usage.
 
 ---
 
 # 🔭 Observability
 
-Every action is traceable:
+All executions are traced via OpenTelemetry:
 
-* selected tool
-* execution duration
+* tool selection
+* latency
 * token usage
 * cost
-* validations
+* validation results
 * runtime errors
-* OpenTelemetry traces
 
-Observability exists to:
-
-* understand
-* debug
-* audit
-
-Never to replace cognition.
+Observability is strictly diagnostic.
+It never participates in decision-making.
 
 ---
 
 # 🔧 Technical Stack
 
-| Component         | Technology                        |
-| ----------------- | --------------------------------- |
-| Language          | Python 3.11+                      |
-| CLI               | Typer                             |
-| Memory            | SQLite + FTS5 + sqlite-vec        |
-| LLM Layer         | LiteLLM                           |
-| Sandbox           | Bubblewrap                        |
-| Monitoring        | OpenTelemetry                     |
-| Performance Layer | Rust (PyO3 dispatch acceleration) |
+| Component  | Technology                       |
+| ---------- | -------------------------------- |
+| Language   | Python 3.11+                     |
+| Router     | Rust (PyO3)                      |
+| CLI        | Typer                            |
+| Memory     | SQLite + WAL + FTS5 + sqlite-vec |
+| LLM Layer  | LiteLLM                          |
+| Sandbox    | Bubblewrap                       |
+| Monitoring | OpenTelemetry                    |
+| Interface  | Terminal REPL + Telegram         |
 
 ---
 
-# 📊 Project Status
+# 🚀 Status
 
-| Component          | Status    |
-| ------------------ | --------- |
-| Core Agent Loop    | ✅ Working |
-| Cognitive Contract | ✅ Working |
-| SQLite Memory      | ✅ Working |
-| Sandbox Execution  | ✅ Working |
-| Skills System      | ✅ Working |
-| Telegram Interface | ✅ Working |
-| Anti-Drift Metrics | ✅ Working |
-
-### Current Status
-
-* 300+ tests passing
-* Local-first runtime operational
-* Architecture aligned with cognitive contract
-* Production-ready core runtime
+* Tests: 243 / 243 passing
+* Regressions: 0
+* Suite runtime: ~12.6s
+* Router latency: < 0.002 ms
 
 ---
 
 # 🚀 Quick Start
 
-## Requirements
+## Install
 
-* Python 3.11+
-* git
-* SQLite development libraries
-* bubblewrap (optional)
 
-## Installation
-
-```bash
 git clone https://github.com/Crea1ions/Arke.git
 cd Arke
-
 python3 -m venv .venv
 source .venv/bin/activate
-
 pip install -e .
-```
 
-## First Run
 
-```bash
-# Interactive mode
-arke
+## Run
 
-# Execute directly
+
+arke chat
 arke run "analyze nginx logs"
-
-# Telegram interface
 arke --telegram
-```
-pip install -e .
 
-# Install MCP dependencies (optional)
-pip install httpx beautifulsoup4 feedparser
-
-→ Full setup guide: `SETUP.md`
 
 ---
 
 # 📚 Documentation
 
-| Document                     | Purpose                                 |
-| ---------------------------- | --------------------------------------- |
-| `SETUP.md`                   | Installation and configuration          |
-| `Arke-cognitive-contract.md` | Cognitive invariants and decision model |
-| `Arke-architecture.md`       | Internal architecture                   |
-| `Arke-alignment.md`          | System alignment doctrine               |
+| Document                      | Purpose                        |
+| ----------------------------- | ------------------------------ |
+| `SETUP.md`                    | Installation and configuration |
+| `Arke-cognitive-alignment.md` | Cognitive continuity model     |
+| `Arke-architecture.md`        | System architecture            |
+| `Arke-alignment.md`           | Agent / System separation      |
 
 ---
 
 # 🧪 Testing
 
-```bash
+
 pytest tests/ -v
-```
 
-Coverage includes:
 
-* cognitive contract invariants
-* execution safety
-* memory systems
+Covers:
+
+* deterministic execution
+* memory consistency
+* sandbox safety
+* skill lifecycle
 * orchestrator validation
-* anti-drift guarantees
 
 ---
 
 # 🤝 Contributing
 
-Contributions are welcome, provided they preserve:
+Contributions are welcome if they preserve:
 
-* cognitive invariants
-* agent-first architecture
-* deterministic execution
-* local-first philosophy
+* agent-first decision model
+* deterministic execution layer
+* local-first architecture
+* SQLite-based persistence
+* strict system/agent separation
 
 ---
 
 # 📜 License
 
-MIT License.
+MIT License
+
+---
+
+
