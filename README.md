@@ -113,16 +113,6 @@ graph TD
     I --> J[Response]
     J --> K[Memory Update]
     K --> B
-
-    style C fill:#2d2d2d,stroke:#78c8ff,stroke-width:3px,color:#e0e0e0
-    style F fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style E fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style G fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style H fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style I fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style J fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style K fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style B fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
 ```
 
 ---
