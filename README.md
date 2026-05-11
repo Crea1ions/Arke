@@ -100,20 +100,29 @@ Only the agent decides.
 
 # 🏗️ Execution Pipeline
 
-```mermaid
-graph TD
-    A[User Input] --> B[Conversation Context]
-    B --> C[Agent LLM]
-    C --> D[Tool Intent]
-    D --> E[Unified Endpoint]
-    E --> F[Deterministic Orchestrator]
-    F --> G[Validation Gates]
-    G --> H[Sandbox Execution]
-    H --> I[Telemetry]
-    I --> J[Response]
-    J --> K[Memory Update]
-    K --> B
-```
+User Input
+↓
+Conversation Context (session.db)
+↓
+Agent LLM (SOLE DECIDER)
+↓
+Tool Intent
+↓
+Unified Endpoint
+↓
+Deterministic Orchestrator
+↓
+Validation Gates (schema, filesystem, return codes)
+↓
+Sandbox Execution (bubblewrap)
+↓
+Telemetry (OpenTelemetry)
+↓
+Response
+↓
+Memory Update (skills + history)
+↓
+(loop back to Conversation Context)
 
 ---
 
@@ -151,29 +160,6 @@ Memory strategy:
 * **sqlite-vec** → semantic retrieval (< 5 ms on small corpora)
 * **LLM fallback** → only when retrieval is insufficient
 
-
-```mermaid
-graph TD
-    G[global.db] --> M[Memory Layer]
-    P[project.db] --> M
-    S[session.db] --> M
-    C[cache.db] --> M
-
-    M --> FTS[FTS5 Full-text]
-    M --> VEC[sqlite-vec Semantic]
-    M --> LLM[LLM Fallback]
-
-    style G fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
-    style P fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
-    style S fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
-    style C fill:#2d2d2d,stroke:#78c8ff,stroke-width:1px,color:#c0c0c0
-    style M fill:#1a1a1a,stroke:#3a3a3a,stroke-width:1px,color:#808080
-    style FTS fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style VEC fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-    style LLM fill:#2d2d2d,stroke:#5a5a5a,stroke-width:1px,color:#a0a0a0
-
-    linkStyle default stroke:#3a3a3a,stroke-width:1px
-```
 ---
 
 # 🧩 Skills System
