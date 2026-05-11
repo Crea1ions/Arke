@@ -101,27 +101,49 @@ Only the agent decides.
 # 🏗️ Execution Pipeline
 
 User Input
+
 ↓
+
 Conversation Context (session.db)
+
 ↓
+
 Agent LLM (SOLE DECIDER)
+
 ↓
+
 Tool Intent
+
 ↓
+
 Unified Endpoint
+
 ↓
+
 Deterministic Orchestrator
+
 ↓
+
 Validation Gates (schema, filesystem, return codes)
+
 ↓
+
 Sandbox Execution (bubblewrap)
+
 ↓
+
 Telemetry (OpenTelemetry)
+
 ↓
+
 Response
+
 ↓
+
 Memory Update (skills + history)
+
 ↓
+
 (loop back to Conversation Context)
 
 ---
