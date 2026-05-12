@@ -1,4 +1,4 @@
-"""SocialOrchestrator -- manages cognitive initiative timing (Phase 0: observation-only).
+"""SocialOrchestrator -- manages cognitive initiative timing (Phase 1: active delivery).
 
 Responsibilities (purely deterministic):
 - Track user activity via ``record_input()`` / ``is_user_idle()``
@@ -368,13 +368,29 @@ class SocialOrchestrator:
                 log.debug("social_orchestrator.mark_ignored_error", error=str(exc))
 
     # ------------------------------------------------------------------
-    # Phase 1 stub (not yet active)
+    # Phase 1: initiative generation and queuing
     # ------------------------------------------------------------------
 
     def _generate_and_queue(self, thread: dict, allowed_patterns: list[str]) -> None:
-        """Phase 1: generate initiative text and queue it for REPL delivery."""
-        # TODO: Phase 1 — call ReengagementGenerator
-        pass
+        """Phase 1: generate initiative text and queue it for REPL delivery.
+
+        Uses CIG's generate_soft_reactivation() so that both delivery paths
+        (SO timer-based + CIG post-exchange) produce the same canonical template.
+        No-ops when the generated text is empty (thread has no content/summary).
+        """
+        from arke.cognitive_initiative_gate import generate_soft_reactivation
+
+        text = generate_soft_reactivation(thread)
+        if not text:
+            log.debug("social_orchestrator.generate_empty", thread_id=thread.get("id"))
+            return
+        self._pending_initiative = text
+        self._pending_thread_id = thread["id"]
+        log.info(
+            "social_orchestrator.initiative_queued",
+            thread_id=thread["id"],
+            patterns=allowed_patterns,
+        )
 
     # ------------------------------------------------------------------
     # Density tracking (called from chat.py after each exchange)

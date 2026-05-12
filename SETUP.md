@@ -362,9 +362,9 @@ pytest tests/ -v
 tests/test_cognitive_contract.py::test_contract_injection PASSED
 tests/test_orchestrator.py::test_cli_execution PASSED
 tests/test_memory.py::test_fts5_search PASSED
-... (339 tests)
+... (433 tests)
 
-339 passed, 6 skipped in ~21s
+433 passed, 6 skipped in ~30s
 ```
 
 ### 2. Check Memory Databases

@@ -30,6 +30,7 @@ _DB_TABLE_PREFIXES: dict[str, list[str]] = {
     "global": [
         "config", "tool_usage", "skills", "pattern_log", "agent_learnings",
         "cognitive_threads", "interaction_density", "initiative_simulation_log",
+        "initiative_log",
     ],
     "project": ["docs"],
     "session": ["session_context", "active_tasks", "chat_history", "memory_fts"],
@@ -138,7 +139,38 @@ class MemoryManager:
                 except Exception:  # noqa: BLE001
                     pass  # OK if rebuild already ran or no rows exist
 
+        if db == "global":
+            with self._connect(db) as conn:
+                self._run_migrations(conn)
+                conn.commit()
+
         log.info("memory.bootstrap", db=db, path=str(path))
+
+    def _run_migrations(self, conn: sqlite3.Connection) -> None:
+        """Idempotent ALTER TABLE migrations for global.db.
+
+        Adds columns introduced after the initial schema was deployed.
+        Uses try/except OperationalError so re-runs are safe.
+        """
+        migrations = [
+            "ALTER TABLE cognitive_threads ADD COLUMN reactivation_score REAL DEFAULT 0",
+            "ALTER TABLE cognitive_threads ADD COLUMN density_context REAL",
+        ]
+        for stmt in migrations:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # Column already exists — safe to ignore
+
+        # Seed reactivation_score from importance_score for existing rows
+        try:
+            conn.execute(
+                "UPDATE cognitive_threads "
+                "SET reactivation_score = importance_score "
+                "WHERE reactivation_score = 0 AND importance_score > 0"
+            )
+        except sqlite3.OperationalError:
+            pass
 
     def _init_schema(self, conn: sqlite3.Connection, db: str) -> None:
         """Execute schema statements relevant to *db*."""

@@ -47,6 +47,7 @@ from arke.anti_drift_metrics import get_metrics_instance
 from arke.tool_registry import TOOL_REGISTRY
 from arke.thread_extractor import extract_async
 from arke.social_orchestrator import SocialOrchestrator
+from arke.cognitive_initiative_gate import cognitive_initiative_engine, mark_initiative_accepted, detect_positive_signal
 
 log = structlog.get_logger()
 
@@ -757,6 +758,7 @@ def start() -> None:
     _social_orchestrator = SocialOrchestrator(mm, _session_id)
     _social_orchestrator.start()
     _cancel_extraction = [None]  # type: list[threading.Event | None]
+    _last_cig = [None, ""]  # type: list  # [log_id: str|None, initiative_text: str]
 
     # Initialize workspace cache (WVS)
     try:
@@ -963,6 +965,17 @@ def start() -> None:
         _cancel_extraction[0] = _threading.Event()
         extract_async(mm, _session_id, intention, response_text, _cancel_extraction[0])
 
+        # --- Cognitive Initiative Gate: soft thread reactivation (Phase 1) ---
+        _cig_text, _cig_log_id = cognitive_initiative_engine(
+            mm,
+            {"intention": intention, "response": response_text},
+            paused=not _social_orchestrator._enabled,
+        )
+        if _cig_text:
+            print(T.initiative_block(_cig_text))
+            _last_cig[0] = _cig_log_id
+            _last_cig[1] = _cig_text
+
     # -----------------------------------------------------------------------
     # REPL loop
     # -----------------------------------------------------------------------
@@ -997,6 +1010,13 @@ def start() -> None:
         raw = raw.strip()
         if not raw:
             continue
+
+        # --- CIG feedback: detect positive engagement signal ---
+        if _last_cig[0] is not None:
+            if detect_positive_signal(raw, _last_cig[1]):
+                mark_initiative_accepted(mm, _last_cig[0])
+            _last_cig[0] = None
+            _last_cig[1] = ""
 
         # Print user block in the thread
         print(T.user_block(raw))

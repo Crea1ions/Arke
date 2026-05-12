@@ -167,6 +167,23 @@ CREATE TABLE IF NOT EXISTS initiative_simulation_log (
 );
 
 -- ============================================================
+-- initiative_log — CIG Phase 1 delivery log
+-- Records each soft-reactivation proposed to the user.
+-- accepted = 1 if explicit positive signal received, NULL if unknown.
+-- NULL is the correct default: absence of reply ≠ rejection.
+-- Auto-calibration only counts rows WHERE accepted IS NOT NULL.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS initiative_log (
+    id               TEXT PRIMARY KEY,   -- uuid4
+    thread_id        TEXT,
+    type             TEXT DEFAULT 'soft_reactivation',
+    density_snapshot REAL,
+    accepted         INTEGER DEFAULT NULL,  -- NULL=unknown, 1=accepted, 0=rejected
+    context_anchor   TEXT,
+    timestamp        TEXT DEFAULT (datetime('now'))
+);
+
+-- ============================================================
 -- cache.db — LLM optimisation (cached responses, TTL)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS llm_cache (

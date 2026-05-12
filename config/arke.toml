@@ -140,7 +140,7 @@ description = "Recherche d'actualités DuckDuckGo News + fetch de page web"
 # ===========================================================================
 [social_orchestrator]
 enabled = true
-observation_mode = true          # Phase 0: log only, no delivery
+observation_mode = false         # Phase 1: active delivery enabled
 min_silence_minutes = 30
 active_hours_start = 8
 active_hours_end = 23
@@ -161,6 +161,10 @@ reactivation_threshold = 0.65   # min reactivation_score for a dormant thread
 thread_max_age_days = 14         # dormant threads older than this are excluded
 auto_calibrate = true            # adjust threshold_density after enough samples
 calibration_min_samples = 30     # minimum rows WHERE accepted IS NOT NULL required
+semantic_anchor = false          # Phase 2: hybrid keyword+vector anchor (requires [vector] enabled)
+semantic_threshold = 0.65        # cosine similarity threshold when semantic_anchor = true
+divergence_rate = 0.05           # probability of divergent reactivation (Serendipity principle)
+decay_rate = 0.95                # exponential score decay per day of dormancy (Oubli Progressif)
 
 # ===========================================================================
 # Passive User Workspace (PUW) — Orchestrator-managed storage layer
