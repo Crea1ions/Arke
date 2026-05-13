@@ -328,14 +328,14 @@ def _pick_default_model() -> str | None:
 class StreamingMarkdownDisplay:
     """Display streaming LLM output in real-time with ANSI color styling.
 
-    CRITICAL: Preserves original streaming behavior (emit every token immediately).
-    Integrates Session 033 rendering for styling by complete lines when possible.
+    CRITICAL INVARIANT: Emit every token immediately (preserve streaming behavior).
+    Apply styling opportunistically to complete lines (those with \n).
 
     Args:
         use_live: Kept for API compatibility.
         show_internal_markup: When True, preserve [OUTIL:], [ARGS:], [PLAN:] markers.
         line_prefix: ANSI string prepended at start of each visible line.
-        on_first_token: Optional callback on first visible token.
+        on_first_token: Optional callback fired on first visible token.
     """
 
     def __init__(
@@ -346,21 +346,18 @@ class StreamingMarkdownDisplay:
         on_first_token: Any = None,
     ):
         self.buffer: list[str] = []
-        self._pending = ""  # Accumulate for line-by-line styling
         self._started = False
         self._line_prefix = line_prefix
         self._at_line_start = True
         self._on_first_token = on_first_token
-        self._show_internal_markup = show_internal_markup
         self._renderer = MarkdownRenderer(show_internal_markup=show_internal_markup)
+        self._line_accumulator = ""  # Collect tokens to render by lines
 
     def add_token(self, token: str) -> None:
-        """Emit token with streaming + per-line markdown styling.
+        """Emit token immediately with styling applied where possible.
         
-        PRAGMATIC: Emit each complete line immediately for real-time streaming.
-        Apply markdown styling to each line for structure (headers, bold, etc.).
-        Trade-off: Multi-line patterns (bold across 2+ lines) won't fully style,
-        but single-line patterns work great. Session 034 will improve this.
+        Each token is written to stdout as it arrives (streaming behavior).
+        Styling is applied to complete lines (those ending with \\n).
         """
         # Normalize line endings
         token = token.replace("\r\n", "\n").replace("\r", "")
@@ -371,48 +368,31 @@ class StreamingMarkdownDisplay:
             self._on_first_token()
             self._started = True
 
-        # Accumulate for line processing
-        self._pending += token
+        # Accumulate into line buffer to render by lines
+        self._line_accumulator += token
 
-        # Process each complete line immediately
-        while "\n" in self._pending:
-            line_end = self._pending.index("\n")
-            line = self._pending[:line_end]
-            self._pending = self._pending[line_end + 1:]
-
+        # Split by newlines and emit complete lines with styling
+        lines = self._line_accumulator.split("\n")
+        
+        # All but the last element are complete lines (followed by \n)
+        for line in lines[:-1]:
             # Render this line with markdown styling
-            # (headers, single-line bold, code, etc. style well)
             try:
                 styled = self._renderer.render(line) if line else ""
             except Exception:  # noqa: BLE001
                 styled = line
 
-            # Apply line prefix
+            # Apply line prefix for threading
             if self._line_prefix:
                 styled = self._line_prefix + styled
 
-            # Emit immediately (streaming!)
+            # Emit with newline (streaming!)
             sys.stdout.write(styled + "\n")
             sys.stdout.flush()
             self._at_line_start = True
 
-        # Handle any remaining partial line (at end of response)
-        if self._pending:
-            visible = self._pending if self._show_internal_markup else self._strip_markup(self._pending)
-            if self._line_prefix and self._at_line_start:
-                visible = self._line_prefix + visible
-            sys.stdout.write(visible)
-            sys.stdout.flush()
-            self._at_line_start = False
-
-    def _strip_markup(self, text: str) -> str:
-        """Remove internal control markup from text."""
-        import re
-        # Remove [PLAN:..../PLAN], [OUTIL:...], [ARGS:...] markers
-        text = re.sub(r'\[PLAN:.*?/PLAN\]', '', text, flags=re.DOTALL)
-        text = re.sub(r'\[OUTIL:[^\]]*\]', '', text)
-        text = re.sub(r'\[ARGS:[^\]]*\]', '', text)
-        return text
+        # Keep the last (incomplete) part in accumulator
+        self._line_accumulator = lines[-1]
 
     def get_full_text(self) -> str:
         """Return accumulated raw text."""
@@ -422,15 +402,38 @@ class StreamingMarkdownDisplay:
         return self._started
 
     def close(self) -> None:
-        """Finalize: no-op since all content already emitted."""
-        # Everything already streamed in add_token
-        pass
+        """Finalize: emit any remaining partial line."""
+        if self._line_accumulator:
+            try:
+                styled = self._renderer.render(self._line_accumulator)
+            except Exception:  # noqa: BLE001
+                styled = self._line_accumulator
+
+            if self._line_prefix:
+                styled = self._line_prefix + styled
+
+            sys.stdout.write(styled)
+            if not styled.endswith("\n"):
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._line_accumulator = ""
 
     def close_inline(self) -> None:
-        """Inline close: no-op."""
-        pass
+        """Close for inline output."""
+        if self._line_accumulator:
+            try:
+                styled = self._renderer.render(self._line_accumulator)
+            except Exception:  # noqa: BLE001
+                styled = self._line_accumulator
 
-    # Legacy compatibility
+            if self._line_prefix:
+                styled = self._line_prefix + styled
+
+            sys.stdout.write(styled)
+            sys.stdout.flush()
+            self._line_accumulator = ""
+
+    # Legacy compatibility method
     def _consume_visible_text(self, chunk: str) -> str:
         """Compatibility method."""
         return chunk
