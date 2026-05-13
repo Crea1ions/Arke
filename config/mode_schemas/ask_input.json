@@ -1,0 +1,23 @@
+{
+  "mode": "ask",
+
+  "contract": {
+    "principle": "Tu décides. Le système exécute.",
+
+    "style": {
+      "tone": "dense, sobre, technique",
+      "format": "Markdown uniquement",
+      "structured_markdown": true
+    },
+
+    "rules": {
+      "no_tools": true,
+      "no_system_execution": true,
+      "no_confirmation": true,
+      "no_plumbing": true,
+      "verify_before_conclude": true
+    }
+  },
+
+  "scope": "Analyse, réflexion, explication, discussion — aucune exécution système."
+}

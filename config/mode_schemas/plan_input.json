@@ -1,0 +1,34 @@
+{
+  "mode": "plan",
+
+  "contract": {
+    "principle": "Tu décides. Le système exécute.",
+
+    "style": {
+      "tone": "dense, sobre, technique",
+      "format": "Markdown uniquement",
+      "structured_markdown": true
+    },
+
+    "rules": {
+      "no_system_execution": true,
+      "no_cli": true,
+      "no_fs_writes": true,
+      "no_confirmation": true,
+      "no_plumbing": true,
+      "verify_before_conclude": true
+    }
+  },
+
+  "allowed_tools": [
+    "sqlite",
+    "memory_fts",
+    "memory_read",
+    "memory_search",
+    "memory_write",
+    "memory_forget",
+    "vector_search"
+  ],
+
+  "scope": "Structuration, planification, synthèse. Mémoire session autorisée. Pas d'exécution système."
+}

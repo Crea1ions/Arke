@@ -21,9 +21,17 @@ level  = "info"
 [mcp]
 # ContextForge federated MCP endpoint (JSON-RPC 2.0 over HTTP)
 # Set via env var CONTEXTFORGE_URL to override at runtime.
-base_url       = "http://localhost:3000/mcp"
-timeout_sec    = 5
-enabled        = true
+base_url          = "http://localhost:3000/mcp"
+timeout_sec       = 5
+enabled           = true
+max_cache_entries = 1000
+
+[mcp.cache_ttl]
+# TTL per tool in hours (0 = never expires)
+web_search = 24
+github     = 168     # 1 week
+rss_reader = 2
+calculator = 0
 
 [cache]
 # LLM response cache TTL in hours (0 = no expiry)
@@ -90,7 +98,20 @@ Tu es Arke, un agent cognitif autonome local-first.
 - Ta vraie mémoire reste dans tes 4 bases SQLite (global.db, session.db, project.db, cache.db)
 - Le workspace est l'extension de la mémoire UTILISATEUR uniquement
 
-Réponds en français, de façon concise. Pour les tâches techniques, propose une action concrète et exécute-la si l'utilisateur confirme.
+Réponds en français, de façon concise. Pour les tâches techniques, analyse et exécute directement.
+
+## Ton & style
+- Direct. Dense. Sobre. Pas de préambule.
+- Jamais : "Bien sûr !", "Excellente question !", "Je vais maintenant…", "Voici ce que je vais faire".
+- Jamais de validation émotionnelle artificielle ni de transitions visibles.
+- Réponses courtes par défaut. Plus long seulement si la complexité le justifie.
+- Ne pas sur-expliquer. Ne pas répéter la question. Ne pas annoncer ce qu'on va faire.
+- Emoji : rares, uniquement si utilitaires (✓ ✗ ⚡ — jamais décoratifs).
+
+## Hiérarchie locale-d'abord
+- Cherche d'abord dans : CLI, FS, SQLite, mémoire locale.
+- MCP (GitHub, Slack…) : uniquement si aucune source locale ne peut répondre.
+- Ne jamais appeler un outil externe pour une tâche que le système local peut faire.
 """
 
 # ============================================================
@@ -166,6 +187,13 @@ semantic_threshold = 0.65        # cosine similarity threshold when semantic_anc
 divergence_rate = 0.05           # probability of divergent reactivation (Serendipity principle)
 decay_rate = 0.95                # exponential score decay per day of dormancy (Oubli Progressif)
 
+[cognitive_initiative_gate.utility_weights]
+# Composite utility score weights for initiative ranking (must sum to 1.0)
+reactivation = 0.4   # w1 — decayed reactivation_score
+importance   = 0.3   # w2 — thread importance_score
+density      = 0.2   # w3 — current interaction density
+relevance    = 0.1   # w4 — semantic relevance (0 when semantic_anchor = false)
+
 # ===========================================================================
 # Passive User Workspace (PUW) — Orchestrator-managed storage layer
 # ===========================================================================
@@ -176,3 +204,25 @@ enabled = true
 # WCU root path (default: <project_root>/arke-workspace/WCU)
 # Override via context dict passed to orchestrator.run(intention, context)
 wcu_root = "arke-workspace/WCU"
+
+# ===========================================================================
+# Orchestrator — Plan auto-execution safety (Phase 2: GOAP)
+# Auto-exec is NEVER active until the user explicitly opts in.
+# ===========================================================================
+[orchestrator]
+# disabled     : never auto-execute (safe default)
+# after_consent: propose opt-in after auto_exec_suggest_after repetitions
+# always       : reserved for future use (requires after_consent first)
+auto_exec_mode          = "disabled"
+auto_exec_suggest_after = 3         # repetitions before proposing opt-in
+
+# ===========================================================================
+# Agent Modes — control tool access per conversation intent
+# /ask (default) : no tools — analysis and discussion only
+# /search        : read-only local + MCP search tools
+# /plan          : session memory writes only
+# /dev           : unrestricted — all tools available
+# ===========================================================================
+[agent_modes]
+default_mode = "ask"   # safest default — prevents unintended tool execution
+dev_warning  = true    # print warning when entering /dev mode

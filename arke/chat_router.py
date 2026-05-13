@@ -44,6 +44,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/status": "État réel du système (bases, skills, mémoire, providers)",
     "/config": "Configuration interactive (LLM, télémétrie, sandbox, vectoriel)",
     "/check":  "Vérifie l'état de chaque composant (providers, bwrap, sqlite-vec, OTel)",
+    "/debug":  "Active/désactive le mode debug sessionnel (/debug [on|off|rendering])",
     "/model":  "Sélecteur de modèle LLM interactif",
     "/memory": "Affiche les notes mémorisées de la session",
     "/about":  "À propos d'Arke (architecture, philosophie)",
@@ -53,6 +54,11 @@ SLASH_COMMANDS: dict[str, str] = {
     "/drop-thread":        "Abandonne un fil cognitif (/drop-thread <id>)",
     "/pause-initiatives":  "Suspend les initiatives cognitive (/pause-initiatives [heures])",
     "/resume-initiatives": "Réactive les initiatives cognitives",
+    # Agent mode commands — control tool access
+    "/ask":    "Mode analyse — aucun outil (défaut, le plus sûr)",
+    "/search": "Mode recherche — lecture seule (SQLite, FTS, MCP)",
+    "/plan":   "Mode planification — mémoire session uniquement",
+    "/dev":    "Mode développement — tous les outils disponibles",
     # Workspace View System (WVS) commands — filtered from /help, only shown in /show_workspace
     "/show_workspace":     "Visualize entire workspace structure",
     "/show_mobile_notes":  "Details of mobile-notes (capture layer)",

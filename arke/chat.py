@@ -48,13 +48,25 @@ from arke.tool_registry import TOOL_REGISTRY
 from arke.thread_extractor import extract_async
 from arke.social_orchestrator import SocialOrchestrator
 from arke.cognitive_initiative_gate import cognitive_initiative_engine, mark_initiative_accepted, detect_positive_signal
-
+from arke.mode_manager import (
+    get_mode as _get_mode,
+    set_mode as _set_mode,
+    is_valid_mode,
+    build_input_context,
+    _VALID_MODES,
+)
 log = structlog.get_logger()
 
 # Theme is loaded lazily so tests that don't import chat.py directly still work
 from arke import chat_theme as T  # noqa: E402
+from arke import task_classifier  # noqa: E402
+from arke import result_analyzer  # noqa: E402
 
 _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
+_CAPABILITY_REFERENCE_PATH = "memory/mcp_reference.md"
+
+# Maximum lines of tool step output shown in normal mode (debug bypasses this).
+_MAX_STEP_LINES = 8
 
 # Visual placeholder for newline in the paste-review prompt
 _PASTE_NL = " ↵ "
@@ -116,6 +128,8 @@ def _read_paste_buffered(prompt: str) -> str:
 # Active model alias for the current session (mutable via @alias or /model)
 _active_model_alias: list[str] = ["flash"]
 
+# Agent mode state is managed by arke.mode_manager
+
 # Spinner frames for loading indication
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 _spinner_state: list[int] = [0]
@@ -141,6 +155,16 @@ def _get_alias() -> str:
 
 def _set_alias(alias: str) -> None:
     _active_model_alias[0] = alias
+
+
+def _prompt_with_mode() -> str:
+    """Build the REPL prompt string with mode badge and model alias."""
+    base = T.prompt_line(_get_alias())
+    mode = _get_mode()
+    # Inject the mode badge just before the › character.
+    # T.prompt_line returns: "\n{mlabel} · {ts}\n{ACCENT}›{RESET} "
+    badge = f"{T.MUTED}[{mode}]{T.RESET} "
+    return base.replace(f"\n{T.ACCENT}›{T.RESET} ", f"\n{badge}{T.ACCENT}›{T.RESET} ")
 
 
 def _load_env_file() -> None:
@@ -176,87 +200,23 @@ def _load_agent_config() -> dict:
 
 
 def build_cognitive_context(user_message: str, session_id: str = "") -> str:
-    """Build the cognitive contract JSON injected before every LLM call.
-    
+    """Build the cognitive context JSON injected before every LLM call.
+
+    Délègue à arke.mode_manager.build_input_context — conservé pour
+    compatibilité avec les callsites existants.
+
     Args:
         user_message: The user's input message
         session_id: Optional session ID (generated if not provided)
-    
+
     Returns:
-        JSON string containing cognitive contract context
+        JSON string containing the mode-specific input context
     """
-    if not session_id:
-        session_id = str(uuid.uuid4())
-    
-    contract = {
-        "session": {
-            "id": session_id,
-            "conversation_id": str(uuid.uuid4()),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        },
-        "input": user_message,
-        "hierarchy": {
-            "0_direct_response": "penser avant d'agir",
-            "1_local_light": "CLI, FS, SQLite, mémoire FTS5",
-            "2_skills_local": "workflows appris, patterns connus",
-            "3_vector_local": "recherche sémantique sqlite-vec",
-            "4_mcp_external": "périphérie du cerveau, rare et stratégique"
-        },
-        "mantra": "simplest-first, local-first, MCP-last. Stop at the first sufficient level.",
-        "constraints": {
-            "agent_decides_everything": True,
-            "system_never_interprets": True,
-            "system_never_executes_without_llm_intent": True
-        },
-        "mcp_servers": {
-            "web_search": {
-                "type": "Python",
-                "timeout": 30,
-                "tools": [
-                    {"name": "web_search", "description": "Recherche web via DuckDuckGo", "params": ["query", "max_results"]},
-                    {"name": "fetch_page", "description": "Récupère contenu complet d'une page", "params": ["url", "max_length"]}
-                ]
-            },
-            "calculator": {
-                "type": "Python",
-                "timeout": 10,
-                "tools": [
-                    {"name": "calculate", "description": "Évalue expression mathématique", "params": ["expression"]},
-                    {"name": "convert_units", "description": "Convertit unité (m→cm, €→$, etc)", "params": ["value", "from_unit", "to_unit"]},
-                    {"name": "random_number", "description": "Génère nombre aléatoire", "params": ["min", "max", "integer"]},
-                    {"name": "statistics", "description": "Calcule stats (mean/median/sum/min/max/variance)", "params": ["numbers", "operation"]}
-                ]
-            },
-            "rss_reader": {
-                "type": "Python",
-                "timeout": 20,
-                "tools": [
-                    {"name": "read_rss", "description": "Lit flux RSS/Atom", "params": ["url", "limit"]},
-                    {"name": "discover_rss", "description": "Découvre flux RSS sur un site", "params": ["url"]},
-                    {"name": "fetch_full_content", "description": "Récupère contenu complet d'un article RSS", "params": ["url"]}
-                ]
-            },
-            "github": {
-                "type": "Python",
-                "timeout": 30,
-                "tools": [
-                    {"name": "github_repo", "description": "Info dépôt GitHub (stars, description, etc)", "params": ["owner", "repo"]},
-                    {"name": "github_search", "description": "Recherche dépôts GitHub", "params": ["query", "max_results", "sort"]},
-                    {"name": "github_readme", "description": "Récupère README d'un dépôt", "params": ["owner", "repo", "branch"]},
-                    {"name": "github_user", "description": "Info utilisateur GitHub", "params": ["username"]}
-                ]
-            },
-            "freeweb": {
-                "type": "npx",
-                "timeout": 60,
-                "tools": [
-                    {"name": "web_search", "description": "Recherche multi-source (Yahoo, Bing)", "params": ["query", "max_results"]}
-                ]
-            }
-        }
-    }
-    
-    return json.dumps(contract, indent=2)
+    return build_input_context(
+        mode=_get_mode(),
+        user_message=user_message,
+        session_id=session_id,
+    )
 
 
 def _build_system_prompt(mm: Any) -> str:
@@ -359,82 +319,132 @@ def _pick_default_model() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Streaming display with Rich
+# Streaming display — direct stdout token-by-token
 # ---------------------------------------------------------------------------
 
 
 class StreamingMarkdownDisplay:
-    """Display streaming LLM output in real-time using Rich Live Markdown."""
+    """Display streaming LLM output in real-time by writing tokens directly to stdout.
 
-    def __init__(self, use_live: bool = True):
-        """Initialize streaming display.
-        
-        Args:
-            use_live: If True, use Rich Live for real-time updates (nicer but experimental).
-                     If False, use simple line buffering (more stable).
-        """
-        self.buffer = []
-        self.use_live = use_live
-        self._live = None
-        self._last_update_time = time.time()
-        self._update_interval = 0.05  # 50ms minimum between updates
-        
-        if use_live:
-            try:
-                from rich.live import Live
-                from rich.markdown import Markdown
-                
-                self._Live = Live
-                self._Markdown = Markdown
-            except ImportError:
-                self.use_live = False
-                log.warning("streaming.rich_not_available, falling back to line buffering")
+    Args:
+        use_live: Kept for API compatibility (unused internally).
+        show_internal_markup: When True, bypass the control-marker filter.
+        line_prefix: ANSI string prepended at the start of each visible line
+            (e.g. ``"│  "`` for thread formatting).  Default: empty string.
+        on_first_token: Optional callable fired exactly once when the first
+            visible token reaches stdout.  Used to print an agent header before
+            streaming content appears.
+    """
+
+    def __init__(
+        self,
+        use_live: bool = True,
+        show_internal_markup: bool = False,
+        line_prefix: str = "",
+        on_first_token: Any = None,
+    ):
+        self.buffer: list[str] = []
+        self._pending_visible = ""
+        self._show_internal_markup = show_internal_markup
+        self._suppress_until: str | None = None
+        self._started = False
+        self._line_prefix = line_prefix
+        self._at_line_start = True
+        self._on_first_token = on_first_token
 
     def add_token(self, token: str) -> None:
-        """Add a token to the display buffer and update if needed."""
-        self.buffer.append(token)
-        
-        # Update display every 50ms or immediately on line breaks
-        current_time = time.time()
-        should_update = (
-            "\n" in token
-            or (current_time - self._last_update_time) >= self._update_interval
-        )
-        
-        if should_update:
-            self._update_display()
-            self._last_update_time = time.time()
+        """Write visible token content to stdout while keeping raw markup in buffer.
 
-    def _update_display(self) -> None:
-        """Update the live display with accumulated buffer."""
-        if not self.use_live:
-            return
-        
-        try:
-            full_text = "".join(self.buffer)
-            if not self._live:
-                self._live = self._Live(self._Markdown(full_text), transient=False)
-                self._live.start()
-            else:
-                self._live.update(self._Markdown(full_text))
-        except Exception as exc:
-            log.debug("streaming.display_update_failed", error=str(exc))
+        Strips ``\\r`` (bare carriage returns / CRLF) from the token before
+        processing to avoid ``^M`` artefacts in the terminal.
+        """
+        token = token.replace("\r\n", "\n").replace("\r", "")
+        self.buffer.append(token)
+        visible = token if self._show_internal_markup else self._consume_visible_text(token)
+        if visible:
+            if not self._started and self._on_first_token:
+                self._on_first_token()
+            if self._line_prefix:
+                # Insert the line prefix at the start of every visible line.
+                out: list[str] = []
+                for char in visible:
+                    if self._at_line_start and char != "\n":
+                        out.append(self._line_prefix)
+                        self._at_line_start = False
+                    out.append(char)
+                    if char == "\n":
+                        self._at_line_start = True
+                visible = "".join(out)
+            sys.stdout.write(visible)
+            sys.stdout.flush()
+            self._started = True
 
     def get_full_text(self) -> str:
-        """Get the complete accumulated text."""
         return "".join(self.buffer)
 
     def tokens_added(self) -> bool:
-        """Check if any tokens have been added to the buffer."""
-        return len(self.buffer) > 0
+        return self._started
 
     def close(self) -> None:
-        """Finalize and close the display."""
-        if self._live:
-            try:
-                self._live.stop()
-            except Exception:  # noqa: BLE001
-                pass
+        """Ensure the streamed output ends on a clean newline."""
+        if self._started and not self._at_line_start:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    def _consume_visible_text(self, chunk: str) -> str:
+        """Return the user-visible portion of *chunk* while skipping control markup."""
+        self._pending_visible += chunk
+        visible_parts: list[str] = []
+        index = 0
+
+        while index < len(self._pending_visible):
+            if self._suppress_until is not None:
+                if self._suppress_until == "]":
+                    end = self._pending_visible.find("]", index)
+                    if end == -1:
+                        self._pending_visible = ""
+                        return "".join(visible_parts)
+                    index = end + 1
+                    self._suppress_until = None
+                    continue
+
+                end = self._pending_visible.find(self._suppress_until, index)
+                if end == -1:
+                    self._pending_visible = ""
+                    return "".join(visible_parts)
+                index = end + len(self._suppress_until)
+                self._suppress_until = None
+                continue
+
+            if self._pending_visible[index] != "[":
+                visible_parts.append(self._pending_visible[index])
+                index += 1
+                continue
+
+            marker = self._match_control_marker(self._pending_visible[index:])
+            if marker == "partial":
+                break
+            if marker is None:
+                visible_parts.append("[")
+                index += 1
+                continue
+
+            self._suppress_until = "]" if marker in ("[OUTIL:", "[ARGS:") else "/PLAN]"
+            index += len(marker)
+
+        self._pending_visible = self._pending_visible[index:]
+        return "".join(visible_parts)
+
+    @staticmethod
+    def _match_control_marker(text: str) -> str | None:
+        """Return a control marker, ``partial`` for incomplete prefixes, or None."""
+        markers = ("[OUTIL:", "[ARGS:", "[PLAN:")
+        for marker in markers:
+            if text.startswith(marker):
+                return marker
+            if marker.startswith(text):
+                return "partial"
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -457,37 +467,75 @@ def _extract_plan_from_response(response_text: str) -> str | None:
     return None
 
 
-def _confirm_plan(plan_text: str) -> bool:
-    """Display plan and ask user for confirmation.
-    
-    Args:
-        plan_text: The plan text to display
-    
-    Returns:
-        True if user confirms, False otherwise
-    """
-    print(T.BORDER + "┌" + T.RESET)
-    print(T.BORDER + "│ 📋 Plan de travail" + T.RESET)
-    print(T.BORDER + "├" + T.RESET)
-    for line in plan_text.splitlines():
-        print(T.BORDER + "│ " + T.RESET + line)
-    print(T.BORDER + "└" + T.RESET)
-    print()
-    
-    # Ask for confirmation
-    while True:
-        try:
-            response = input(T.prompt_line("Exécuter ce plan? (y/n): ")).strip().lower()
-            if response in ("y", "yes", "oui", "o"):
-                return True
-            elif response in ("n", "no", "non"):
-                return False
-        except KeyboardInterrupt:
-            print("\n" + T.step_err("cli") + " Annulation")
-            return False
-        except EOFError:
-            print("\n" + T.step_err("cli") + " Annulation")
-            return False
+def _strip_internal_markup(text: str) -> str:
+    """Remove internal control markup from user-visible assistant text."""
+    cleaned = re.sub(r'\[PLAN:.*?/PLAN\]', '', text, flags=re.DOTALL)
+    cleaned = re.sub(r'\[OUTIL:.*?\]', '', cleaned)
+    cleaned = re.sub(r'\[ARGS:.*?\]', '', cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
+def _is_context_introspection_request(intention: str) -> bool:
+    """Return True when the user explicitly asks to inspect the injected context."""
+    text = intention.lower()
+    patterns = (
+        "montre moi le contexte",
+        "montre-moi le contexte",
+        "contexte que tu reçois",
+        "context you receive",
+        "show me the context",
+        "show the context you receive",
+        "prompt que tu reçois",
+    )
+    return any(pattern in text for pattern in patterns)
+
+
+def _build_context_introspection_response(
+    cognitive_json: str,
+    context: dict[str, Any],
+) -> str:
+    """Build a bounded, user-visible summary of the injected context."""
+    try:
+        contract = json.loads(cognitive_json)
+    except json.JSONDecodeError:
+        contract = {}
+
+    runtime = contract.get("runtime", {})
+    history_count = len(context.get("history", []))
+
+    lines = [
+        "# Contexte injecté",
+        "",
+        f"- session.id: {runtime.get('session_id', 'unknown')}",
+        f"- turn_id: {runtime.get('turn_id', 'unknown')}",
+        f"- timestamp: {runtime.get('timestamp', 'unknown')}",
+        f"- mode: {runtime.get('mode', 'unknown')}",
+        f"- historique injecté: {history_count} échange(s)",
+        f"- capability reference: {_CAPABILITY_REFERENCE_PATH}",
+        "",
+        "Le contrat cognitif est réinjecté à chaque tour sous forme compacte.",
+        "La capability reference détaillée n'est plus embarquée dans ce contexte nominal.",
+    ]
+    return "\n".join(lines)
+
+
+def _apply_introspection_guard(
+    intention: str,
+    agent_decision: dict[str, Any],
+    cognitive_json: str,
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Prevent tool execution loops for explicit context introspection requests."""
+    if not _is_context_introspection_request(intention):
+        return agent_decision, False
+
+    if agent_decision.get("tool") is None:
+        return agent_decision, False
+
+    return {
+        "tool": None,
+        "response": _build_context_introspection_response(cognitive_json, context),
+    }, True
 
 
 
@@ -606,23 +654,10 @@ def _ask_agent(
         "- Après une tâche réussie avec 3+ étapes, tu peux créer une compétence.\n"
         "- Le système détecte les occasions et affiche : \"💡 Pattern detected. /skill to create one.\"\n"
         "- Utilise `/skill` pour créer une compétence réutilisable.\n\n"
-        "## 🎯 Planification pour tâches multi-étapes (IMPORTANT)\n\n"
-        "Si la tâche nécessite PLUSIEURS ÉTAPES:\n"
-        "1. D'abord, propose un plan avec le format:\n"
-        "   [PLAN:\n"
-        "   1. Description de l'étape 1\n"
-        "   2. Description de l'étape 2\n"
-        "   3. Description de l'étape 3\n"
-        "   /PLAN]\n\n"
-        "2. Termine par: Proceed with this plan?\n\n"
-        "3. Après validation de l'utilisateur, une fois chaque étape complétée, tu verras le résultat précédent dans le contexte. Tu peux alors décider de l'étape suivante.\n\n"
-        "Exemple:\n"
-        "[PLAN:\n"
-        "1. Lister les fichiers dans /tmp\n"
-        "2. Grep les fichiers contenant 'error'\n"
-        "3. Créer un rapport avec les résultats\n"
-        "/PLAN]\n"
-        "Proceed with this plan?\n\n"
+        "## 🎯 Planification multi-étapes\n\n"
+        "Si la tâche nécessite plusieurs étapes, décide de la séquence puis agis.\n"
+        "Ne demande jamais de confirmation et n'affiche jamais de bloc de plan visible.\n"
+        "Si un outil est nécessaire, réponds en Markdown naturel puis ajoute seulement les balises [OUTIL:] et [ARGS:] à la fin.\n"
         "Si tu n'as pas besoin d'outil, réponds normalement sans balises.\n\n"
         "## Règle absolue\n"
         "Tu réponds TOUJOURS. Même face à une réflexion ouverte ou une observation, "
@@ -648,7 +683,10 @@ def _ask_agent(
 {history_text}## Message utilisateur:
 {intention}
 
-Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [OUTIL:] et [ARGS:] à la fin."""
+Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [OUTIL:] et [ARGS:] à la fin.
+
+**Important** : Pour les plans multi-étapes, crée PLUSIEURS blocs [OUTIL:]/[ARGS:] **séparés** (un par étape logique).
+Ne combine pas les commandes CLI avec && ou |. Chaque étape = un outil indépendant."""
     
     # Reload env vars in case new keys were added via /config
     _load_env_file()
@@ -677,53 +715,76 @@ Réponds en Markdown naturel. Si tu dois utiliser un outil, ajoute les balises [
         log.error("llm.agent_decision_failed", error=str(exc), exc_info=True)
         raise  # Re-raise so caller can handle it appropriately
     
-    # Parse response with Markdown + [OUTIL:] and [ARGS:] tags
+    # Parse response for multiple [OUTIL:] and [ARGS:] pairs
+    # Supports multi-step sequences: [OUTIL: tool1] [ARGS: {...}] then [OUTIL: tool2] [ARGS: {...}] etc.
     response_text = response_text.strip()
     
-    # Look for [OUTIL: tool_name] and [ARGS: {...}] tags
-    outil_match = re.search(r'\[OUTIL:\s*(\w+)\]', response_text)
-    args_match = re.search(r'\[ARGS:\s*(\{)', response_text)
+    # Extract all [OUTIL: ...] tags
+    outil_pattern = r'\[OUTIL:\s*(\w+)\]'
+    outil_matches = list(re.finditer(outil_pattern, response_text))
     
-    if outil_match and args_match:
-        # Extract tool and args
-        tool = outil_match.group(1).lower()
-        try:
-            # Find the start of the JSON object and parse it properly
-            json_start = args_match.start(1)
-            # Find matching closing brace using JSON parsing (more reliable than regex)
-            json_str = response_text[json_start:]
-            
-            # Use json.JSONDecoder to find where the JSON ends
-            decoder = json.JSONDecoder()
-            args, idx = decoder.raw_decode(json_str)
-            args_json = json_str[:idx]
-        except json.JSONDecodeError as exc:
-            log.warning("llm.agent_args_parse_failed", error=str(exc), raw=json_str[:100] if 'json_str' in locals() else "")
-            args = {}
+    # Extract all [ARGS: ...] blocks
+    args_pattern = r'\[ARGS:\s*(\{)'
+    args_matches = list(re.finditer(args_pattern, response_text))
+    
+    if outil_matches and args_matches and len(outil_matches) == len(args_matches):
+        # Multi-step task support: parse tool-args pairs
+        tools_sequence = []
         
-        # Remove tags from response text to show only Markdown
-        clean_response = re.sub(r'\[OUTIL:.*?\]\n?', '', response_text)
-        clean_response = re.sub(r'\[ARGS:.*?\]\n?', '', clean_response).strip()
-        
-        # If agent requests tool="llm", execute it directly here (not via orchestrator)
-        if tool == "llm":
-            prompt_template = args.get("prompt_template", intention)
-            task_type = args.get("task_type", "reasoning")
-            max_tokens = args.get("max_tokens", 500)
+        for idx, (outil_m, args_m) in enumerate(zip(outil_matches, args_matches)):
+            tool = outil_m.group(1).lower()
             try:
-                llm_response, _cost, _tokens = manager.complete(
-                    prompt=prompt_template, task_type=task_type, max_tokens=max_tokens
-                )
-                return {"tool": None, "response": llm_response}
-            except Exception as exc:
-                log.error("llm.agent_execution_failed", error=str(exc))
-                return {"tool": None, "response": f"Erreur LLM: {str(exc)}"}
+                # Find the start of the JSON object and parse it
+                json_start = args_m.start(1)
+                json_str = response_text[json_start:]
+                
+                # Use json.JSONDecoder to find where the JSON ends
+                decoder = json.JSONDecoder()
+                args, end_idx = decoder.raw_decode(json_str)
+            except json.JSONDecodeError as exc:
+                log.warning("llm.agent_args_parse_failed", error=str(exc), tool=tool)
+                args = {}
+            
+            # Special handling for "llm" tool: execute directly, don't add to sequence
+            if tool == "llm":
+                prompt_template = args.get("prompt_template", intention)
+                task_type = args.get("task_type", "reasoning")
+                max_tokens = args.get("max_tokens", 500)
+                try:
+                    llm_response, _cost, _tokens = manager.complete(
+                        prompt=prompt_template, task_type=task_type, max_tokens=max_tokens
+                    )
+                    return {"tool": None, "response": llm_response}
+                except Exception as exc:
+                    log.error("llm.agent_execution_failed", error=str(exc))
+                    return {"tool": None, "response": f"Erreur LLM: {str(exc)}"}
+            
+            if tool in ["cli", "fs", "sqlite", "mcp"]:
+                tools_sequence.append({"tool": tool, "args": args})
         
-        # Return decision with cleaned response (tool must be cli|fs|sqlite|mcp)
+        # Remove all tags from response text to show only Markdown
+        clean_response = re.sub(r'\[OUTIL:.*?\]', '', response_text)
+        clean_response = re.sub(r'\[ARGS:.*?\]', '', clean_response).strip()
+        
+        # Handle single vs multiple tools
+        first_tool_dict = tools_sequence[0] if tools_sequence else {}
+        first_tool = first_tool_dict.get("tool")
+        first_args = first_tool_dict.get("args", {})
+        
+        # If only one tool, use simple format for backward compatibility
+        if len(tools_sequence) == 1:
+            return {
+                "tool": first_tool,
+                "args": first_args,
+                "response": clean_response or None
+            }
+        
+        # If multiple tools, return multi-step format
         return {
-            "tool": tool if tool in ["cli", "fs", "sqlite", "mcp"] else None,
-            "args": args,
-            "response": clean_response or None
+            "tool": first_tool,  # Backward compat: primary tool
+            "args": first_args,
+            "response": clean_response or None,
+            "multi_step": tools_sequence  # New: all steps for orchestrator
         }
     else:
         # No tool tags found — pure conversational response
@@ -759,6 +820,21 @@ def start() -> None:
     _social_orchestrator.start()
     _cancel_extraction = [None]  # type: list[threading.Event | None]
     _last_cig = [None, ""]  # type: list  # [log_id: str|None, initiative_text: str]
+    _debug_state = {"enabled": False, "rendering": False}
+
+    # Restore agent mode from previous session context (defaults to "ask" if absent)
+    try:
+        _mode_rows = mm.query(
+            "session",
+            "SELECT value FROM session_context WHERE key = 'agent_mode'",
+            (),
+        )
+        if _mode_rows and _mode_rows[0]["value"] in _VALID_MODES:
+            _set_mode(_mode_rows[0]["value"])
+        else:
+            _set_mode("ask")
+    except Exception:
+        _set_mode("ask")
 
     # Initialize workspace cache (WVS)
     try:
@@ -804,16 +880,41 @@ def start() -> None:
         # Inject cognitive contract into context (preserves Chantier C)
         cognitive_json = build_cognitive_context(intention)
         context["cognitive_contract_json"] = cognitive_json
+        # Propagate current agent mode to orchestrator for tool gating
+        context["agent_mode"] = _get_mode()
 
-        # Setup streaming display for agent response
-        stream_display = StreamingMarkdownDisplay(use_live=True)
-        
+        force_render_response = False
+
+        # Resolve alias early — needed for the agent header printed before streaming.
+        alias = result.model_alias or _get_alias()
+
+        # on_first_token: erase "Thinking..." and open the thread block the moment
+        # the first visible token arrives, so the header appears exactly once.
+        _header_shown = [False]
+
+        def _show_agent_header() -> None:
+            if not _header_shown[0]:
+                # Move cursor up one line and erase "Thinking..." line.
+                sys.stdout.write("\033[1A\033[2K")
+                sys.stdout.flush()
+                print(T.agent_header(alias))
+                print(T.BORDER + "│" + T.RESET)
+                _header_shown[0] = True
+
+        # Setup streaming display — thread framing via line_prefix.
+        _line_prefix = f"{T.BORDER}│{T.RESET}  "
+        stream_display = StreamingMarkdownDisplay(
+            use_live=True,
+            show_internal_markup=_debug_state["enabled"],
+            line_prefix=_line_prefix,
+            on_first_token=_show_agent_header,
+        )
+
         def stream_callback(token: str) -> None:
             """Callback to display streaming tokens."""
             stream_display.add_token(token)
-        
+
         # Ask agent to decide: tool or direct response (with streaming)
-        # Show spinner while waiting for LLM response
         print(f"\n{T.MUTED}Thinking...{T.RESET}")
         try:
             agent_decision = _ask_agent(cognitive_json, intention, context, stream_display_callback=stream_callback)
@@ -833,44 +934,68 @@ def start() -> None:
             history_append(mm, "user", intention, model_used=None)
             history_append(mm, "assistant", f"Error: {exc}", model_used=None)
             return
+
+        agent_decision, force_render_response = _apply_introspection_guard(
+            intention,
+            agent_decision,
+            cognitive_json,
+            context,
+        )
         
-        # Finalize streaming display
+        # Finalize streaming display — closes the open line if needed.
         stream_display.close()
-        
+        # If streaming occurred, close the thread block with a │ line.
+        if stream_display.tokens_added():
+            print(T.BORDER + "│" + T.RESET)
+
         # If agent says no tool needed, respond directly
         if agent_decision.get("tool") is None:
-            # Direct response from agent
-            response = agent_decision.get("response", "")
-            
-            # Check for plan in response
-            plan = _extract_plan_from_response(response) if response else None
-            if plan:
-                # Display the plan and ask for confirmation
-                print()
-                if not _confirm_plan(plan):
-                    print(T.step_err("cli") + " Tâche annulée.")
-                    history_append(mm, "user", intention, model_used=None)
-                    history_append(mm, "assistant", "Plan rejected by user.", model_used=None)
-                    return
-                print()
-                # Plan confirmed, continue to execution
-                # Remove plan markers from response display
-                clean_response = re.sub(r'\[PLAN:.*?/PLAN\]', '', response, flags=re.DOTALL).strip()
-                response = clean_response
-            
-            alias = result.model_alias or _get_alias()
-            print(T.agent_header(alias))
-            print(T.BORDER + "│" + T.RESET)
-            # Skip redundant print if response was already streamed via stream_display
-            if response and not stream_display.tokens_added():
-                for line in response.splitlines():
-                    print(T.step_output(line))
-            print(T.BORDER + "│" + T.RESET)
+            # Fix C: always sanitise — strip internal markup + bare CR regardless of
+            # whether a [PLAN:] marker was present.
+            response = _strip_internal_markup(
+                agent_decision.get("response", "")
+            ).replace("\r\n", "\n").replace("\r", "")
+
+            # If streaming didn't display anything yet (introspection override or
+            # very short decision), print the response now inside a fresh thread block.
+            if force_render_response or not stream_display.tokens_added():
+                if not _header_shown[0]:
+                    _show_agent_header()
+                if response:
+                    for line in response.splitlines():
+                        print(T.step_output(line))
+                    print(T.BORDER + "│" + T.RESET)
+
             history_append(mm, "user", intention, model_used=None)
-            history_append(mm, "assistant", response or (plan or "Plan proposed"), model_used=None)
+            history_append(mm, "assistant", response or "Réponse directe.", model_used=None)
             return
         
         # Agent wants to use a tool; pass decision to orchestrator
+        # Pre-orchestrator gate: if current mode forbids this tool, drop the
+        # tool call and fall back to the agent's textual response.
+        _current_mode = _get_mode()
+        _requested_tool = agent_decision.get("tool")
+        if _requested_tool is not None:
+            from arke.mode_manager import can_execute_tool as _can_exec
+            if not _can_exec(_requested_tool, _current_mode):
+                response = _strip_internal_markup(
+                    agent_decision.get("response", "")
+                ).replace("\r\n", "\n").replace("\r", "")
+                if not response:
+                    response = (
+                        f"[Mode /{_current_mode}] Analyse uniquement. "
+                        f"Utilisez /dev pour exécuter des outils système."
+                    )
+                if not stream_display.tokens_added():
+                    if not _header_shown[0]:
+                        _show_agent_header()
+                    for line in response.splitlines():
+                        print(T.step_output(line))
+                    print(T.BORDER + "│" + T.RESET)
+                history_append(mm, "user", intention, model_used=None)
+                history_append(mm, "assistant", response, model_used=None)
+                return
+
         context["agent_decision"] = agent_decision
         
         try:
@@ -881,9 +1006,9 @@ def start() -> None:
 
         printer = _StepPrinter(total)
 
-        # Print agent header block
-        alias = result.model_alias or _get_alias()
-        print(T.agent_header(alias))
+        # Agent header was already printed by on_first_token during streaming.
+        # Open a new thread block for the execution steps.
+        print(T.BORDER + "│" + T.RESET)
         # Routing meta line
         if total > 0:
             try:
@@ -892,6 +1017,14 @@ def start() -> None:
             except Exception:  # noqa: BLE001
                 pass
         print(T.BORDER + "│" + T.RESET)
+
+        # Keep classification available for internal diagnostics without blocking execution.
+        task_classifier.classify(
+            intention,
+            tools=[step.tool for step in task_plan.steps],
+            step_count=len(task_plan.steps),
+            args=agent_decision.get("args", {}),
+        )
 
         # Patch _execute_step
         _orig_execute = orch._execute_step
@@ -913,20 +1046,76 @@ def start() -> None:
 
         # Output
         if task.status == StepStatus.SUCCESS:
-            last = task.steps[-1]
-            output = last.output
-            if isinstance(output, dict):
-                text = output.get("stdout", "").rstrip()
-            else:
-                text = str(output).rstrip()
-            if text:
+            # Multi-step tasks: analyze and summarize results
+            # Single-step tasks: show output from the only step
+            if len(task.steps) > 1:
+                # Multi-step: aggregate all outputs
                 print(T.BORDER + "│" + T.RESET)
-                for line in text.splitlines():
-                    print(T.step_output(line))
-            cost = task.total_cost or 0.0
-            print(T.done_line(task.tokens_used, elapsed, cost))
-            print(T.BORDER + "│" + T.RESET)
-            response_text = text or "Tâche terminée."
+                
+                # Analyze results (if diagnostic/report task)
+                is_diagnostic = any(
+                    word in intention.lower()
+                    for word in ["rapport", "report", "status", "diagnostic", "health", "check"]
+                )
+                
+                if is_diagnostic:
+                    # Diagnostic tasks: show structured analysis instead of raw outputs
+                    analysis = result_analyzer.analyze_diagnostic_results(task.steps, intention)
+                    summary = result_analyzer.format_summary(analysis)
+                    for line in summary.splitlines():
+                        print(T.step_output(line))
+                else:
+                    # Non-diagnostic multi-step: show raw outputs for each step
+                    for step in task.steps:
+                        if step.status == StepStatus.SUCCESS:
+                            output = step.output
+                            if isinstance(output, dict):
+                                text = output.get("stdout", "").rstrip()
+                            else:
+                                text = str(output).rstrip()
+                            if text:
+                                # Show step tool and output (truncated in normal mode)
+                                print(T.step_meta("tool", step.tool))
+                                step_lines = text.splitlines()
+                                limit = len(step_lines) if _debug_state["enabled"] else _MAX_STEP_LINES
+                                for line in step_lines[:limit]:
+                                    print(T.step_output(line))
+                                if not _debug_state["enabled"] and len(step_lines) > _MAX_STEP_LINES:
+                                    print(T.step_output(
+                                        f"{T.MUTED}… +{len(step_lines) - _MAX_STEP_LINES} lignes (/debug pour tout voir){T.RESET}"
+                                    ))
+                        elif step.status == StepStatus.FAILED:
+                            print(T.step_meta("tool", f"{step.tool} (⚠ failed)"))
+
+                cost = task.total_cost or 0.0
+                print(T.done_line(task.tokens_used, elapsed, cost))
+                print(T.BORDER + "│" + T.RESET)
+                # Fix B: streaming was already displayed live with thread framing.
+                # Capture for history only — do NOT reprint.
+                response_text = _strip_internal_markup(stream_display.get_full_text()) or "Exploration complétée."
+            else:
+                # Single-step: show output from the only step
+                last = task.steps[-1]
+                output = last.output
+                if isinstance(output, dict):
+                    text = output.get("stdout", "").rstrip()
+                else:
+                    text = str(output).rstrip()
+                if text:
+                    print(T.BORDER + "│" + T.RESET)
+                    step_lines = text.splitlines()
+                    limit = len(step_lines) if _debug_state["enabled"] else _MAX_STEP_LINES
+                    for line in step_lines[:limit]:
+                        print(T.step_output(line))
+                    if not _debug_state["enabled"] and len(step_lines) > _MAX_STEP_LINES:
+                        print(T.step_output(
+                            f"{T.MUTED}… +{len(step_lines) - _MAX_STEP_LINES} lignes (/debug pour tout voir){T.RESET}"
+                        ))
+                cost = task.total_cost or 0.0
+                print(T.done_line(task.tokens_used, elapsed, cost))
+                print(T.BORDER + "│" + T.RESET)
+                # Fix B: streaming already displayed live. Capture for history only.
+                response_text = _strip_internal_markup(stream_display.get_full_text()) or text or "Tâche terminée."
             
             # Check for distillation hint (Session 014.2.3)
             try:
@@ -994,7 +1183,7 @@ def start() -> None:
                     if initiative:
                         print(T.initiative_block(initiative))
 
-            raw = _read_paste_buffered(T.prompt_line(_get_alias()))
+            raw = _read_paste_buffered(_prompt_with_mode())
             _ctrl_c_count[0] = 0
         except KeyboardInterrupt:
             _ctrl_c_count[0] += 1
@@ -1050,6 +1239,85 @@ def start() -> None:
             elif cmd == "/check":
                 from arke.chat_config import print_check
                 print_check()
+
+            elif cmd == "/debug":
+                parts = raw.split()
+                mode = parts[1].lower() if len(parts) > 1 else "toggle"
+
+                def _print_debug_rendering_panel() -> None:
+                    """Print the /debug rendering diagnostics panel."""
+                    import shutil
+                    import os as _os
+
+                    # --- Terminal capabilities ---
+                    term_width = shutil.get_terminal_size((80, 24)).columns
+                    colorterm = _os.environ.get("COLORTERM", "")
+                    term_env = _os.environ.get("TERM", "unknown")
+                    from arke.chat_theme import _NO_COLOR
+                    ansi_mode = (
+                        "none (NO_COLOR / dumb)" if _NO_COLOR
+                        else "ANSI 4-bit (16 colors)"
+                    )
+
+                    # --- Contract size ---
+                    sample_contract = build_cognitive_context("__debug_probe__", _session_id)
+                    contract_chars = len(sample_contract)
+                    contract_tokens_approx = contract_chars // 4
+
+                    # --- System prompt size ---
+                    sys_prompt = _build_system_prompt(mm)
+                    prompt_chars = len(sys_prompt)
+                    prompt_tokens_approx = prompt_chars // 4
+
+                    total_overhead_tokens = contract_tokens_approx + prompt_tokens_approx
+
+                    # --- Debug flags ---
+                    dbg_on = "✓ ON" if _debug_state["enabled"] else "✗ OFF"
+                    rdr_on = "✓ ON" if _debug_state["rendering"] else "✗ OFF"
+
+                    lines = [
+                        f"{T.ACCENT}{T.BOLD}╭─ /debug rendering ─────────────────────────────────╮{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET} Mode debug          {T.SUCCESS if _debug_state['enabled'] else T.MUTED}{dbg_on}{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET} Markup interne      {T.SUCCESS if _debug_state['rendering'] else T.MUTED}{rdr_on}{T.RESET}  ([OUTIL:] [ARGS:] [PLAN:] visibles)",
+                        f"{T.ACCENT}│{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET} {T.MUTED}Terminal{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   largeur           {T.TEXT}{term_width} cols{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   TERM              {T.TEXT}{term_env}{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   COLORTERM         {T.TEXT}{colorterm or '(non défini)'}{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   palette ANSI      {T.TEXT}{ansi_mode}{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET} {T.MUTED}Overhead par tour{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   contrat cognitif  {T.TEXT}{contract_chars} chars ≈ {contract_tokens_approx} tokens{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   system prompt     {T.TEXT}{prompt_chars} chars ≈ {prompt_tokens_approx} tokens{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   total injection   {T.WARNING}{total_overhead_tokens} tokens/tour{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET} {T.MUTED}Capability reference{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   path              {T.TEXT}{_CAPABILITY_REFERENCE_PATH}{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   accès             {T.TEXT}lecture à la demande via fs (non injecté){T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET} {T.MUTED}Session{T.RESET}",
+                        f"{T.ACCENT}│{T.RESET}   session_id        {T.TEXT}{_session_id[:16]}…{T.RESET}",
+                        f"{T.ACCENT}╰────────────────────────────────────────────────────╯{T.RESET}",
+                    ]
+                    print("\n" + "\n".join(lines))
+
+                if mode == "rendering":
+                    _debug_state["enabled"] = True
+                    _debug_state["rendering"] = not _debug_state["rendering"]
+                    _print_debug_rendering_panel()
+                elif mode == "on":
+                    _debug_state["enabled"] = True
+                    print(f"{T.MUTED}Mode debug activé pour cette session.{T.RESET}")
+                elif mode == "off":
+                    _debug_state["enabled"] = False
+                    _debug_state["rendering"] = False
+                    print(f"{T.MUTED}Mode debug désactivé pour cette session.{T.RESET}")
+                else:
+                    _debug_state["enabled"] = not _debug_state["enabled"]
+                    if not _debug_state["enabled"]:
+                        _debug_state["rendering"] = False
+                    state = "activé" if _debug_state["enabled"] else "désactivé"
+                    print(f"{T.MUTED}Mode debug {state} pour cette session.{T.RESET}")
 
             elif cmd == "/status":
                 _print_status(mm)
@@ -1107,6 +1375,55 @@ def start() -> None:
             elif cmd == "/resume-initiatives":
                 _social_orchestrator.resume()
                 print(f"{T.MUTED}Initiatives réactivées.{T.RESET}")
+
+            # Agent mode commands
+            elif cmd == "/ask":
+                _set_mode("ask")
+                try:
+                    mm.query(
+                        "session",
+                        "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
+                        ("agent_mode", "ask"),
+                    )
+                except Exception:
+                    pass
+                print(f"{T.MUTED}[ask] Mode analyse actif — aucun outil.{T.RESET}")
+
+            elif cmd == "/search":
+                _set_mode("search")
+                try:
+                    mm.query(
+                        "session",
+                        "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
+                        ("agent_mode", "search"),
+                    )
+                except Exception:
+                    pass
+                print(f"{T.MUTED}[search] Lecture seule (SQLite, FTS, MCP search).{T.RESET}")
+
+            elif cmd == "/plan":
+                _set_mode("plan")
+                try:
+                    mm.query(
+                        "session",
+                        "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
+                        ("agent_mode", "plan"),
+                    )
+                except Exception:
+                    pass
+                print(f"{T.MUTED}[plan] Mémoire session autorisée, aucune exécution système.{T.RESET}")
+
+            elif cmd == "/dev":
+                _set_mode("dev")
+                try:
+                    mm.query(
+                        "session",
+                        "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
+                        ("agent_mode", "dev"),
+                    )
+                except Exception:
+                    pass
+                print(f"{T.WARNING}⚠ [dev] Mode développement actif — outils système disponibles.{T.RESET}")
 
             # Workspace View System (WVS) commands
             elif cmd.startswith("/show_"):
@@ -1438,6 +1755,7 @@ def _print_status(mm: Any) -> None:
         lines.append("")
         lines.append(f"{T.ACCENT}Session{T.RESET}")
         lines.append("")
+        lines.append(f"  {T.MUTED}mode agent{T.RESET}          {T.ACCENT}/{_get_mode()}{T.RESET}")
         lines.append(f"  {T.MUTED}messages historique{T.RESET}  {T.TEXT}{n_msgs}{T.RESET}")
         lines.append(f"  {T.MUTED}notes mémorisées{T.RESET}    {T.TEXT}{n_notes}{T.RESET}")
     except Exception:  # noqa: BLE001

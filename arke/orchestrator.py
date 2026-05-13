@@ -43,22 +43,51 @@ def run(intention: str, context: dict[str, Any] | None = None) -> Task:
     task.status = StepStatus.RUNNING
 
     step_outputs: dict[str, Any] = {}
+    
+    # Determine if this is a multi-step exploration task (agent specified multiple tools)
+    # Multi-step tasks are more resilient: continue on failure instead of stopping
+    is_multi_step = len(task.steps) > 1
+    has_failures = False
 
     for step in task.steps:
         _wait_dependencies(step, step_outputs)
         _execute_step(step, step_outputs, ctx, task)
         if step.status == StepStatus.FAILED:
-            task.status = StepStatus.FAILED
-            log.error("task.failed", task_id=task.id, failed_step=step.id)
-            return task
+            has_failures = True
+            log.warning("step.failed", step_id=step.id, is_multi_step=is_multi_step)
+            if not is_multi_step:
+                # Single-step: fail immediately (original behavior)
+                task.status = StepStatus.FAILED
+                log.error("task.failed", task_id=task.id, failed_step=step.id)
+                return task
+            # Multi-step: log failure but continue to next step
 
-    task.status = StepStatus.SUCCESS
-    log.info(
-        "task.complete",
-        task_id=task.id,
-        total_cost=task.total_cost,
-        tokens_used=task.tokens_used,
-    )
+    # Determine final status based on whether any steps completed successfully
+    if has_failures:
+        # If we have failures, check if we got any successful steps
+        successful_steps = [s for s in task.steps if s.status == StepStatus.SUCCESS]
+        if successful_steps:
+            # Multi-step with partial success: mark as SUCCESS but log partial
+            task.status = StepStatus.SUCCESS
+            log.info(
+                "task.complete_partial",
+                task_id=task.id,
+                total_steps=len(task.steps),
+                successful=len(successful_steps),
+            )
+        else:
+            # All steps failed
+            task.status = StepStatus.FAILED
+            log.error("task.failed_all_steps", task_id=task.id)
+    else:
+        # All steps succeeded
+        task.status = StepStatus.SUCCESS
+        log.info(
+            "task.complete",
+            task_id=task.id,
+            total_cost=task.total_cost,
+            tokens_used=task.tokens_used,
+        )
     # P3.3 — Prometheus counters (fire-and-forget, never interrupts execution)
     try:
         from arke.telemetry import record_task_metrics
@@ -190,6 +219,18 @@ def _traced_dispatch(step: Step, ctx: dict[str, Any], task: Task) -> Any:
 
 def _dispatch(step: Step, ctx: dict[str, Any], task: Task) -> Any:  # noqa: ARG001
     """Route step execution to the correct executor."""
+    # Agent mode gating: block execution if tool not permitted in current mode.
+    # Default to "dev" when agent_mode is absent (backward compat for direct calls).
+    mode = ctx.get("agent_mode", "dev")
+    if not can_execute_tool(step.tool, mode):
+        return {
+            "return_code": 1,
+            "stdout": "",
+            "stderr": (
+                f"[Mode /{mode}] Outil '{step.tool}' non autorisé. "
+                f"Utilisez /dev pour exécuter des outils système."
+            ),
+        }
     if step.tool == "cli":
         return _exec_cli(step)
     if step.tool == "fs":
@@ -386,9 +427,22 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
                 args["tool_name"] = tool_name
 
     # Now server_name and tool_name are set from args
-    
+
     # Mode 1: Serveur MCP individuel (freeweb, calculator, etc.)
     if server_name and tool_name:
+        # --- MCP Cache: check before live execution ---
+        from arke.mcp_cache import McpCache as _McpCache
+        _tool_args = args.get("tool_args", {})
+        _mcp_cache: _McpCache | None = None
+        try:
+            _mcp_cache = _McpCache()
+            _cached = _mcp_cache.get(tool_name, _tool_args)
+            if _cached is not None:
+                return {"return_code": 0, "stdout": _cached, "stderr": ""}
+        except Exception:
+            pass  # cache failure must never block live execution
+        # --- End MCP Cache check ---
+
         config_path = Path(__file__).parent.parent / "config" / "arke.toml"
         try:
             with open(config_path, "rb") as f:
@@ -439,12 +493,23 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
                     result_text = result_content[0].get("text", "{}")
                     try:
                         result_json = json.loads(result_text)
+                        _out = json.dumps(result_json, indent=2)
+                        try:
+                            if _mcp_cache is not None:
+                                _mcp_cache.put(tool_name, _tool_args, _out)
+                        except Exception:
+                            pass
                         return {
                             "return_code": 0,
-                            "stdout": json.dumps(result_json, indent=2),
+                            "stdout": _out,
                             "stderr": ""
                         }
                     except:
+                        try:
+                            if _mcp_cache is not None:
+                                _mcp_cache.put(tool_name, _tool_args, result_text)
+                        except Exception:
+                            pass
                         return {
                             "return_code": 0,
                             "stdout": result_text,
@@ -500,6 +565,14 @@ def _extract_text(output: Any) -> str:
     if isinstance(output, dict):
         return output.get("stdout", "")
     return str(output)
+
+
+# ---------------------------------------------------------------------------
+# Agent mode — tool permission matrix (source: arke.mode_manager)
+# ---------------------------------------------------------------------------
+
+from arke.mode_manager import MODE_PERMISSIONS, can_execute_tool  # noqa: E402
+
 
 
 def _record_step_outcome(step: Step, task: Task, success: bool) -> None:

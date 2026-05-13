@@ -59,6 +59,7 @@ Only memory accumulation over time.
 
 | Feature                        | Purpose                                                        |
 | ------------------------------ | -------------------------------------------------------------- |
+| **Agent Modes**                | `/ask` `/search` `/plan` `/dev` — tool gating per mode         |
 | **Unified Endpoint**           | Single interface for CLI, filesystem, memory, APIs, MCP        |
 | **Deterministic Orchestrator** | Execution layer with strict validation gates                   |
 | **SQLite Memory System**       | Global / project / session / cache storage (FTS5 + sqlite-vec) |
@@ -66,7 +67,7 @@ Only memory accumulation over time.
 | **Skills System**              | Detection of repeated patterns and reusable workflows          |
 | **Multi-Provider LLM Layer**   | Gemini, Claude, Mistral, OpenAI, Ollama                        |
 | **OpenTelemetry Integration**  | Full tracing of execution and cost                             |
-| **Terminal REPL**              | Natural language command interface                             |
+| **Terminal REPL**              | Natural language command interface with mode badge             |
 | **Telegram Interface**         | Optional transport layer (no business logic)                   |
 
 ---
@@ -150,12 +151,13 @@ Memory Update (skills + history)
 
 # 🔐 Cognitive Invariants
 
-Arke enforces three core invariants:
+Arke enforces four core invariants:
 
 
 system_never_interprets = true
 system_never_decides_tools = true
 system_never_executes_without_agent_intent = true
+no_execution_without_explicit_user_mode = true
 
 
 This guarantees:
@@ -164,6 +166,7 @@ This guarantees:
 * no hidden planners
 * no autonomous decision layers
 * no execution without explicit agent intent
+* no tool calls without the user enabling the appropriate mode
 
 ---
 
@@ -194,6 +197,23 @@ Arke identifies repeated behavioral patterns and can abstract them into reusable
 * Automatic pruning of unused skills over time
 
 The agent remains the sole decision-maker for skill usage.
+
+---
+
+# 🎛️ Agent Modes
+
+Arke defaults to `/ask` mode — no tools, direct responses only.
+The user must explicitly switch modes to grant tool access.
+
+| Mode      | Tools Allowed                                     | Use Case                          |
+| --------- | ------------------------------------------------- | --------------------------------- |
+| `/ask`    | **none** — direct LLM response only               | Discussion, questions, concepts   |
+| `/search` | SQLite, memory FTS/vector, web, calculator        | Read-only research                |
+| `/plan`   | memory read/write, SQLite, vector                 | Structured planning and reasoning |
+| `/dev`    | **all** (unrestricted)                            | Implementation, files, CLI        |
+
+Enforcement is double-gated: pre-orchestrator check in `chat.py` and inside `orchestrator._dispatch()`.
+The active mode is displayed in the REPL prompt (`[ask] ›`) and injected into the cognitive contract.
 
 ---
 
@@ -230,7 +250,8 @@ It never participates in decision-making.
 
 # 🚀 Status
 
-* Tests: 243 / 243 passing
+* Version: v1.8.0
+* Tests: 533 / 533 passing
 * Regressions: 0
 * Suite runtime: ~12.6s
 * Router latency: < 0.002 ms

@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
-from arke.chat import _extract_plan_from_response, _confirm_plan
+from arke.chat import _extract_plan_from_response
 
 
 # ============================================================================
@@ -96,94 +96,20 @@ def test_extract_plan_handles_nested_brackets():
 
 
 # ============================================================================
-# Tests for plan confirmation UI
+# Regression: _confirm_plan removed in Session 030 (no blocking confirmations)
 # ============================================================================
 
 
-def test_confirm_plan_user_approves():
-    """Test that _confirm_plan returns True when user approves."""
-    plan_text = """1. Check logs
-2. Analyze errors
-3. Create report"""
-
-    with patch("builtins.input", return_value="y"):
-        result = _confirm_plan(plan_text)
-        assert result is True
-
-
-def test_confirm_plan_user_rejects():
-    """Test that _confirm_plan returns False when user rejects."""
-    plan_text = """1. Check logs
-2. Create report"""
-
-    with patch("builtins.input", return_value="n"):
-        result = _confirm_plan(plan_text)
-        assert result is False
+def test_confirm_plan_removed_session_030():
+    """Regression: _confirm_plan must not exist — Session 030 removed blocking
+    user confirmation flows entirely (cognitive invariant: agent decides)."""
+    import arke.chat as chat_mod
+    assert not hasattr(chat_mod, "_confirm_plan"), (
+        "_confirm_plan must not exist — Session 030 removed all blocking "
+        "confirmation flows. See Arke-alignment.md invariant: agent_decides_everything."
+    )
 
 
-def test_confirm_plan_accepts_multiple_yes_formats():
-    """Test that _confirm_plan accepts different yes formats."""
-    plan_text = "1. Test step"
-
-    # Test 'yes'
-    with patch("builtins.input", return_value="yes"):
-        assert _confirm_plan(plan_text) is True
-
-    # Test 'oui' (French)
-    with patch("builtins.input", return_value="oui"):
-        assert _confirm_plan(plan_text) is True
-
-    # Test 'o' (Spanish/Portuguese)
-    with patch("builtins.input", return_value="o"):
-        assert _confirm_plan(plan_text) is True
-
-
-def test_confirm_plan_accepts_multiple_no_formats():
-    """Test that _confirm_plan accepts different no formats."""
-    plan_text = "1. Test step"
-
-    # Test 'no'
-    with patch("builtins.input", return_value="no"):
-        assert _confirm_plan(plan_text) is False
-
-    # Test 'non' (French)
-    with patch("builtins.input", return_value="non"):
-        assert _confirm_plan(plan_text) is False
-
-
-def test_confirm_plan_handles_keyboard_interrupt():
-    """Test that _confirm_plan handles Ctrl+C gracefully."""
-    plan_text = "1. Test step"
-
-    with patch("builtins.input", side_effect=KeyboardInterrupt):
-        result = _confirm_plan(plan_text)
-        assert result is False
-
-
-def test_confirm_plan_handles_eof():
-    """Test that _confirm_plan handles EOF (Ctrl+D) gracefully."""
-    plan_text = "1. Test step"
-
-    with patch("builtins.input", side_effect=EOFError):
-        result = _confirm_plan(plan_text)
-        assert result is False
-
-
-def test_confirm_plan_displays_box_formatting():
-    """Test that _confirm_plan uses Rich formatting for display."""
-    plan_text = """1. First step
-2. Second step"""
-
-    with patch("builtins.input", return_value="y"):
-        with patch("builtins.print") as mock_print:
-            _confirm_plan(plan_text)
-            
-            # Verify that box drawing characters were printed
-            printed_texts = [str(call) for call in mock_print.call_args_list]
-            printed_str = "\n".join(printed_texts)
-            
-            # Should have printed some output (exact formatting varies)
-            assert mock_print.call_count > 0
 
 
 # ============================================================================
@@ -192,29 +118,13 @@ def test_confirm_plan_displays_box_formatting():
 
 
 def test_extract_and_confirm_workflow():
-    """Test the complete extract + confirm workflow."""
-    agent_response = """I'll help you process the logs.
+    """Session 030 regression: plan extraction works; confirmation flow removed."""
+    agent_response = """[PLAN:\n1. List all log files in /var/log\n2. Search for entries with 'ERROR' level\n3. Create a summary report\n4. Save results to /tmp/report.txt\n/PLAN]"""
 
-First, let me outline my approach:
-
-[PLAN:
-1. List all log files in /var/log
-2. Search for entries with 'ERROR' level
-3. Create a summary report
-4. Save results to /tmp/report.txt
-/PLAN]
-
-Proceed with this plan?"""
-
-    # Extract plan
     plan = _extract_plan_from_response(agent_response)
     assert plan is not None
     assert "List all log files" in plan
-    
-    # Simulate user confirmation
-    with patch("builtins.input", return_value="y"):
-        confirmed = _confirm_plan(plan)
-        assert confirmed is True
+    # No confirmation step — agent decides and executes without blocking prompt.
 
 
 def test_plan_detection_with_complex_commands():
@@ -301,20 +211,6 @@ Second plan content
     # Actually, greedy should capture up to FIRST /PLAN]
     assert "Second plan" not in plan
 
-
-def test_confirm_plan_case_insensitive_input():
-    """Test that user input is normalized to lowercase."""
-    plan_text = "1. Step"
-
-    # Uppercase Y should work
-    with patch("builtins.input", return_value="Y"):
-        result = _confirm_plan(plan_text)
-        assert result is True
-
-    # Mixed case should work
-    with patch("builtins.input", return_value="Yes"):
-        result = _confirm_plan(plan_text)
-        assert result is True
 
 
 if __name__ == "__main__":

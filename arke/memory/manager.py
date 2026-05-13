@@ -34,7 +34,7 @@ _DB_TABLE_PREFIXES: dict[str, list[str]] = {
     ],
     "project": ["docs"],
     "session": ["session_context", "active_tasks", "chat_history", "memory_fts"],
-    "cache": ["llm_cache"],
+    "cache": ["llm_cache", "mcp_cache"],
 }
 
 
@@ -155,6 +155,11 @@ class MemoryManager:
         migrations = [
             "ALTER TABLE cognitive_threads ADD COLUMN reactivation_score REAL DEFAULT 0",
             "ALTER TABLE cognitive_threads ADD COLUMN density_context REAL",
+            # Phase 2: GOAP plan tracking
+            "ALTER TABLE agent_learnings ADD COLUMN plan_hash TEXT",
+            "ALTER TABLE agent_learnings ADD COLUMN plan_approved_count INTEGER DEFAULT 0",
+            "ALTER TABLE agent_learnings ADD COLUMN auto_executable INTEGER DEFAULT 0",
+            "ALTER TABLE agent_learnings ADD COLUMN success_rate REAL DEFAULT 1.0",
         ]
         for stmt in migrations:
             try:

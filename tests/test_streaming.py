@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 
 from arke.llm.litellm_manager import LiteLLMManager
-from arke.chat import StreamingMarkdownDisplay, _ask_agent
+from arke.chat import StreamingMarkdownDisplay, _ask_agent, _strip_internal_markup
 
 
 class MockStreamingChunk:
@@ -137,6 +137,42 @@ def test_streaming_display_handles_tool_markers():
     assert "[ARGS:" in result
 
 
+def test_streaming_display_hides_internal_markers_from_stdout():
+    """Internal control markers must stay out of the visible streaming output."""
+    display = StreamingMarkdownDisplay(use_live=False)
+
+    with patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+        display.add_token("Analyse en cours\n")
+        display.add_token("[OUTIL: sqlite]\n")
+        display.add_token("[ARGS: {\"db\": \"session\"}]")
+        display.add_token("\nRésultat prêt")
+
+    visible = "".join(call.args[0] for call in mock_write.call_args_list)
+    assert "Analyse en cours" in visible
+    assert "Résultat prêt" in visible
+    assert "[OUTIL:" not in visible
+    assert "[ARGS:" not in visible
+
+
+def test_strip_internal_markup_removes_control_blocks():
+    """User-visible text must not keep plan or tool control markup."""
+    raw = (
+        "Je vérifie les données.\n"
+        "[PLAN:\n1. Lire les logs\n/PLAN]\n"
+        "[OUTIL: fs]\n"
+        "[ARGS: {\"path\": \"/tmp/log.txt\"}]\n"
+        "Résultat prêt."
+    )
+
+    cleaned = _strip_internal_markup(raw)
+
+    assert "Je vérifie les données." in cleaned
+    assert "Résultat prêt." in cleaned
+    assert "[PLAN:" not in cleaned
+    assert "[OUTIL:" not in cleaned
+    assert "[ARGS:" not in cleaned
+
+
 def test_streaming_display_close_safe():
     """Test that calling close() multiple times is safe."""
     display = StreamingMarkdownDisplay(use_live=False)
@@ -220,6 +256,32 @@ def test_ask_agent_without_streaming():
             # Verify response
             assert result["tool"] is None
             assert result["response"] == "Direct response without tools"
+
+
+def test_ask_agent_prompt_does_not_teach_confirmation_flow():
+    """The system prompt must not reintroduce visible plans or confirmation prompts."""
+    with patch("arke.chat._load_env_file"):
+        with patch("arke.llm.litellm_manager.LiteLLMManager") as MockLLMClass:
+            mock_manager = MagicMock()
+
+            def _fake_stream_complete(prompt: str, task_type: str = "reasoning", max_tokens: int = 2048):
+                assert "Proceed with this plan?" not in prompt
+                assert "[PLAN:" not in prompt
+                assert "Ne demande jamais de confirmation" in prompt
+                return iter(["Réponse directe"]) 
+
+            mock_manager.stream_complete.side_effect = _fake_stream_complete
+            MockLLMClass.return_value = mock_manager
+
+            result = _ask_agent(
+                cognitive_json="{}",
+                intention="teste le prompt",
+                context={},
+                stream_display_callback=lambda t: None,
+            )
+
+            assert result["tool"] is None
+            assert result["response"] == "Réponse directe"
 
 
 def test_ask_agent_streaming_parses_tool_marker():

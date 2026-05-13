@@ -32,6 +32,7 @@ from arke.cognitive_initiative_gate import (
     auto_calibrate_threshold,
     cognitive_initiative_engine,
     compute_interaction_density,
+    compute_utility_score,
     detect_positive_signal,
     generate_soft_reactivation,
     get_divergent_thread,
@@ -558,3 +559,82 @@ class TestOubliProgressif:
             result = cognitive_initiative_engine(mm, context, paused=False)
 
         assert result == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# TestComputeUtilityScore (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeUtilityScore:
+    """Verify composite utility score formula and weight application."""
+
+    _THREAD = {"reactivation_score": 0.8, "importance_score": 0.6}
+    _W = {"reactivation": 0.4, "importance": 0.3, "density": 0.2, "relevance": 0.1}
+
+    def test_score_uses_all_components(self):
+        """U = 0.4*r + 0.3*i + 0.2*d + 0.1*v"""
+        score = compute_utility_score(
+            self._THREAD, density=0.5, relevance_score=0.3, weights=self._W
+        )
+        expected = 0.4 * 0.8 + 0.3 * 0.6 + 0.2 * 0.5 + 0.1 * 0.3
+        assert score == pytest.approx(expected, abs=1e-9)
+
+    def test_default_relevance_is_zero(self):
+        """When relevance_score omitted, it defaults to 0.0."""
+        score_explicit = compute_utility_score(
+            self._THREAD, density=0.5, relevance_score=0.0, weights=self._W
+        )
+        score_default = compute_utility_score(self._THREAD, density=0.5, weights=self._W)
+        assert score_explicit == pytest.approx(score_default)
+
+    def test_higher_reactivation_wins(self):
+        """Thread with higher reactivation_score must score higher (all else equal)."""
+        low = {"reactivation_score": 0.3, "importance_score": 0.5}
+        high = {"reactivation_score": 0.9, "importance_score": 0.5}
+        assert compute_utility_score(high, density=0.5, weights=self._W) > \
+               compute_utility_score(low, density=0.5, weights=self._W)
+
+    def test_weight_override(self):
+        """Custom weights must override defaults."""
+        importance_only = {"reactivation": 0.0, "importance": 1.0, "density": 0.0, "relevance": 0.0}
+        score = compute_utility_score(self._THREAD, density=0.9, weights=importance_only)
+        assert score == pytest.approx(0.6)  # 1.0 * importance_score
+
+    def test_zero_scores_produce_zero(self):
+        thread = {"reactivation_score": 0.0, "importance_score": 0.0}
+        assert compute_utility_score(thread, density=0.0, weights=self._W) == pytest.approx(0.0)
+
+    def test_engine_selects_highest_utility_thread(self, mm):
+        """Engine must pick the thread with the highest utility, not simply highest reactivation."""
+        _seed_density(mm, 0.9)
+        # Thread A: high reactivation, low importance → moderate utility
+        mm.query(
+            "global",
+            "INSERT INTO cognitive_threads (content, summary, status, reactivation_score, importance_score)"
+            " VALUES (?, ?, 'dormant', ?, ?)",
+            ("réseau connexion timeout problème", "réseau timeout", 0.9, 0.1),
+        )
+        # Thread B: moderate reactivation, high importance → higher utility with default weights
+        mm.query(
+            "global",
+            "INSERT INTO cognitive_threads (content, summary, status, reactivation_score, importance_score)"
+            " VALUES (?, ?, 'dormant', ?, ?)",
+            ("réseau connexion timeout problème", "réseau timeout", 0.7, 0.95),
+        )
+        # w=0.4: A=0.4*0.9+0.3*0.1=0.39  B=0.4*0.7+0.3*0.95=0.565 → B wins
+        with patch("arke.cognitive_initiative_gate._get_config") as mock_cfg:
+            mock_cfg.return_value = {
+                **_DEFAULTS,
+                "divergence_rate": 0.0,
+                "threshold_density": 0.5,
+                "reactivation_threshold": 0.65,
+                "utility_weights": {"reactivation": 0.4, "importance": 0.3,
+                                    "density": 0.2, "relevance": 0.1},
+            }
+            text, log_id = cognitive_initiative_engine(
+                mm,
+                {"intention": "réseau connexion timeout", "response": "timeout problème"},
+                paused=False,
+            )
+        assert text is not None

@@ -114,6 +114,8 @@ def plan(intention: str, context: dict[str, Any]) -> Task:
     If agent has decided (via _ask_agent in chat.py), always use that.
     Only if no agent decision, fall back to pattern-based routing.
 
+    Supports multi-step sequences when agent_decision contains "multi_step" key.
+
     Args:
         intention: Raw user intention string.
         context: Execution context dict (may contain agent_decision from LLM).
@@ -125,6 +127,31 @@ def plan(intention: str, context: dict[str, Any]) -> Task:
     # This respects the agent-first principle: system never decides tools
     agent_decision = context.get("agent_decision")
     if agent_decision:
+        # Check for multi-step sequences
+        multi_step = agent_decision.get("multi_step")
+        if multi_step and isinstance(multi_step, list) and len(multi_step) > 1:
+            # Multi-step task: create steps for each tool in sequence
+            steps = []
+            for tool_spec in multi_step:
+                tool = tool_spec.get("tool")
+                args = tool_spec.get("args", {})
+                
+                # Set defaults for each tool type
+                if tool == "cli":
+                    args.setdefault("command", intention)
+                elif tool == "fs":
+                    args.setdefault("path", intention)
+                elif tool == "sqlite":
+                    args.setdefault("query", intention)
+                
+                if tool in ["cli", "fs", "sqlite", "mcp"]:
+                    step = _single_step(tool, intention, context, args)
+                    steps.append(step)
+            
+            if steps:
+                return Task(id=_new_id(), description=intention, steps=steps)
+        
+        # Single-step or fallback
         tool = agent_decision.get("tool")
         args = agent_decision.get("args", {})
         # Set defaults for each tool type
@@ -136,8 +163,9 @@ def plan(intention: str, context: dict[str, Any]) -> Task:
             args.setdefault("query", intention)
         # Note: tool="llm" is never returned by _ask_agent
         # (it's executed directly there, not passed to orchestrator)
-        step = _single_step(tool, intention, context, args)
-        return Task(id=_new_id(), description=intention, steps=[step])
+        if tool in ["cli", "fs", "sqlite", "mcp"]:
+            step = _single_step(tool, intention, context, args)
+            return Task(id=_new_id(), description=intention, steps=[step])
 
     # Step 2: If no agent decision, check for recognized patterns (fallback only)
     low = intention.lower()

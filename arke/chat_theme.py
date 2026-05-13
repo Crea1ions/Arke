@@ -32,16 +32,7 @@ def _ansi(code: str) -> str:
     return f"\033[{code}m"
 
 
-def _rgb(r: int, g: int, b: int) -> str:
-    if _NO_COLOR:
-        return ""
-    return f"\033[38;2;{r};{g};{b}m"
-
-
-def _rgb_bg(r: int, g: int, b: int) -> str:
-    if _NO_COLOR:
-        return ""
-    return f"\033[48;2;{r};{g};{b}m"
+# _rgb / _rgb_bg removed — ANSI 4-bit palette only (no truecolor)
 
 
 # Detect no-color environments
@@ -56,37 +47,32 @@ BOLD    = _ansi("1")
 DIM     = _ansi("2")
 ITALIC  = _ansi("3")
 
-# --- Arke-dark semantic palette -------------------------------------------
-#  border    #2A2F3A  → RGB(42,47,58)
-#  surface   #171A21  → used for separators
-#  text      #E6EAF2  → RGB(230,234,242)
-#  muted     #8B93A7  → RGB(139,147,167)
-#  accent    #6DD6FF  → RGB(109,214,255)  — Arke identity
-#  success   #7EE787  → RGB(126,231,135)
-#  warning   #E3B341  → RGB(227,179,65)
-#  error     #FF7B72  → RGB(255,123,114)
-#  user      #ADBAC7  → RGB(173,186,199)  — grey-cold
-#  flash     #5FD7FF  → RGB(95,215,255)
-#  claude    #C6A0FF  → RGB(198,160,255)
-#  mistral   #7EE787  → RGB(126,231,135)
-#  local     #FFB86B  → RGB(255,184,107)
+# --- Arke semantic palette — ANSI 4-bit (16 colors) ----------------------
+#  BORDER  → dim (code 2)          — structural chrome
+#  TEXT    → default               — primary content
+#  MUTED   → dim (code 2)          — secondary / metadata
+#  ACCENT  → bright cyan  (96)     — Arke identity
+#  SUCCESS → bright green (92)     — ok / done
+#  WARNING → bright yellow (93)    — caution
+#  ERROR   → bright red   (91)     — failure
+#  USER_C  → white        (37)     — user input
 
-BORDER  = _rgb(42, 47, 58)
-TEXT    = _rgb(230, 234, 242)
-MUTED   = _rgb(139, 147, 167)
-ACCENT  = _rgb(109, 214, 255)
-SUCCESS = _rgb(126, 231, 135)
-WARNING = _rgb(227, 179, 65)
-ERROR   = _rgb(255, 123, 114)
-USER_C  = _rgb(173, 186, 199)
+BORDER  = _ansi("2")   # dim
+TEXT    = ""            # terminal default (no code needed)
+MUTED   = _ansi("2")   # dim
+ACCENT  = _ansi("96")  # bright cyan
+SUCCESS = _ansi("92")  # bright green
+WARNING = _ansi("93")  # bright yellow
+ERROR   = _ansi("91")  # bright red
+USER_C  = _ansi("37")  # white
 
-# Per-model colors
+# Per-model colors — ANSI 4-bit
 _MODEL_COLOR = {
-    "flash":   _rgb(95, 215, 255),
-    "claude":  _rgb(198, 160, 255),
-    "mistral": _rgb(126, 231, 135),
-    "local":   _rgb(255, 184, 107),
-    "pro":     _rgb(255, 184, 107),
+    "flash":   _ansi("96"),  # bright cyan
+    "claude":  _ansi("95"),  # bright magenta
+    "mistral": _ansi("92"),  # bright green
+    "local":   _ansi("33"),  # yellow
+    "pro":     _ansi("33"),  # yellow
 }
 
 # Per-model icons
@@ -267,6 +253,21 @@ def error_line(msg: str) -> str:
     return f"{BORDER}│{RESET}  {ERROR}✗ {msg}{RESET}"
 
 
+def error() -> str:
+    """Return error color code for inline use."""
+    return ERROR
+
+
+def success() -> str:
+    """Return success color code for inline use."""
+    return SUCCESS
+
+
+def warning() -> str:
+    """Return warning color code for inline use."""
+    return WARNING
+
+
 def llm_output_line(line: str) -> str:
     """LLM response line with left thread bar."""
     return f"{BORDER}│{RESET}  {TEXT}{line}{RESET}"
@@ -285,14 +286,8 @@ def prompt_line(alias: str) -> str:
 
 # Subtle top→bottom gradient for the logo — identity cyan, not per-model rainbow.
 # "AR" area brighter sky, "KE" area slightly deeper blue-cyan.
-_LOGO_GRADIENT = [
-    _rgb(139, 233, 253),   # #8BE9FD  bright sky        (top)
-    _rgb(109, 214, 255),   # #6DD6FF  ACCENT            (mid-high)
-    _rgb(95,  215, 255),   # #5FD7FF  flash cyan        (mid)
-    _rgb(95,  215, 255),   # #5FD7FF  flash cyan        (mid)
-    _rgb(72,  196, 252),   # #48C4FC  slightly deeper   (low)
-    _rgb(55,  178, 248),   # #37B2F8  deepest           (bottom)
-]
+# Logo rendered in a single ACCENT color — no gradient (4-bit compat)
+_LOGO_GRADIENT = [ACCENT] * 6
 
 _LOGO_LINES = [
     " █████╗ ██████╗ ██╗  ██╗███████╗",
@@ -380,7 +375,7 @@ def banner(sandbox: bool = True) -> str:
 # Cognitive initiative block
 # ---------------------------------------------------------------------------
 
-_INITIATIVE_C = _rgb(181, 160, 255)  # soft violet — distinct from all other roles
+_INITIATIVE_C = _ansi("95")  # bright magenta — cognitive initiative (4-bit)
 
 
 def initiative_block(text: str) -> str:

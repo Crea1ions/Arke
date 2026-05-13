@@ -46,8 +46,15 @@ CREATE TABLE IF NOT EXISTS agent_learnings (
     success             BOOLEAN   NOT NULL DEFAULT 1,
     outcome_summary     TEXT,                  -- What happened (e.g., "3 errors found")
     lesson              TEXT,                  -- What to remember for next time
-    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- Phase 2: GOAP plan tracking (auto-exec opt-in)
+    plan_hash           TEXT,                  -- SHA-256 of normalised plan text (NULL for non-plan entries)
+    plan_approved_count INTEGER   DEFAULT 0,   -- times user explicitly confirmed this plan
+    auto_executable     INTEGER   DEFAULT 0,   -- 1 after user explicitly opts in (never set automatically)
+    success_rate        REAL      DEFAULT 1.0  -- fraction of successful executions
 );
+
+CREATE INDEX IF NOT EXISTS idx_learnings_plan_hash ON agent_learnings(plan_hash);
 
 CREATE INDEX IF NOT EXISTS idx_learnings_intention ON agent_learnings(intention_pattern);
 CREATE INDEX IF NOT EXISTS idx_learnings_success ON agent_learnings(success);
@@ -195,3 +202,20 @@ CREATE TABLE IF NOT EXISTS llm_cache (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at  TIMESTAMP
 );
+
+-- ============================================================
+-- mcp_cache — MCP tool call cache (TTL per tool type)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS mcp_cache (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name   TEXT      NOT NULL,
+    args_hash   TEXT      NOT NULL,
+    response    TEXT      NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at  TIMESTAMP,            -- NULL = never expires
+    hit_count   INTEGER   DEFAULT 1,
+    UNIQUE(tool_name, args_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_cache_expiry ON mcp_cache(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mcp_cache_tool   ON mcp_cache(tool_name);

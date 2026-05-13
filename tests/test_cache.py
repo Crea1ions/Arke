@@ -11,6 +11,8 @@ import pytest
 import arke.memory.manager as mem_mod
 from arke.llm.cache import LlmCache, prompt_hash
 from arke.memory.manager import MemoryManager
+import arke.mcp_cache as mcp_cache_mod
+from arke.mcp_cache import McpCache, args_hash
 
 
 # ---------------------------------------------------------------------------
@@ -339,3 +341,101 @@ class TestGateJsonSchemaComplete:
             output={"name": "Arke"},
         )
         assert validate(step) is True
+
+
+# ---------------------------------------------------------------------------
+# TestMcpArgsHashStability
+# ---------------------------------------------------------------------------
+
+
+class TestMcpArgsHashStability:
+    def test_same_args_same_hash(self):
+        assert args_hash({"q": "python", "n": 3}) == args_hash({"q": "python", "n": 3})
+
+    def test_different_args_different_hash(self):
+        assert args_hash({"q": "python"}) != args_hash({"q": "rust"})
+
+    def test_order_independent(self):
+        """Dict insertion order must not affect the hash."""
+        assert args_hash({"a": 1, "b": 2}) == args_hash({"b": 2, "a": 1})
+
+    def test_empty_args_stable(self):
+        assert args_hash({}) == args_hash({})
+
+
+# ---------------------------------------------------------------------------
+# TestMcpCacheHit
+# ---------------------------------------------------------------------------
+
+
+class TestMcpCacheHit:
+    def test_hit_returns_stored_response(self, mm, monkeypatch):
+        monkeypatch.setattr(mcp_cache_mod, "_load_ttl", lambda _: 24)
+        cache = McpCache(memory=mm)
+        cache.put("web_search", {"q": "python"}, '{"results": []}')
+        result = cache.get("web_search", {"q": "python"})
+        assert result == '{"results": []}'
+
+    def test_hit_increments_hit_count(self, mm, monkeypatch):
+        monkeypatch.setattr(mcp_cache_mod, "_load_ttl", lambda _: 24)
+        cache = McpCache(memory=mm)
+        cache.put("web_search", {"q": "python"}, "data")
+        cache.get("web_search", {"q": "python"})
+        rows = mm.query(
+            "cache",
+            "SELECT hit_count FROM mcp_cache WHERE tool_name = 'web_search'",
+        )
+        assert rows[0]["hit_count"] == 2  # 1 on insert + 1 on get
+
+
+# ---------------------------------------------------------------------------
+# TestMcpCacheMiss
+# ---------------------------------------------------------------------------
+
+
+class TestMcpCacheMiss:
+    def test_miss_returns_none(self, mm, monkeypatch):
+        monkeypatch.setattr(mcp_cache_mod, "_load_ttl", lambda _: 24)
+        cache = McpCache(memory=mm)
+        assert cache.get("web_search", {"q": "missing"}) is None
+
+    def test_put_stores_response(self, mm, monkeypatch):
+        monkeypatch.setattr(mcp_cache_mod, "_load_ttl", lambda _: 24)
+        cache = McpCache(memory=mm)
+        cache.put("calculator", {"expr": "2+2"}, "4")
+        rows = mm.query(
+            "cache",
+            "SELECT response FROM mcp_cache WHERE tool_name = 'calculator'",
+        )
+        assert rows[0]["response"] == "4"
+
+
+# ---------------------------------------------------------------------------
+# TestMcpCacheTTL
+# ---------------------------------------------------------------------------
+
+
+class TestMcpCacheTTL:
+    def test_expired_entry_returns_none(self, mm):
+        """Directly insert an expired row; get() must return None."""
+        key = args_hash({"q": "stale"})
+        mm.query(
+            "cache",
+            "INSERT INTO mcp_cache (tool_name, args_hash, response, expires_at)"
+            " VALUES (?, ?, ?, ?)",
+            ("web_search", key, "old_data", "2000-01-01T00:00:00+00:00"),
+        )
+        cache = McpCache(memory=mm)
+        assert cache.get("web_search", {"q": "stale"}) is None
+
+    def test_no_expiry_entry_persists(self, mm, monkeypatch):
+        """TTL=None (calculator) must set expires_at=NULL and always return."""
+        monkeypatch.setattr(mcp_cache_mod, "_load_ttl", lambda _: None)
+        cache = McpCache(memory=mm)
+        cache.put("calculator", {"expr": "1+1"}, "2")
+        assert cache.get("calculator", {"expr": "1+1"}) == "2"
+        rows = mm.query(
+            "cache",
+            "SELECT expires_at FROM mcp_cache WHERE tool_name = 'calculator'",
+        )
+        assert rows[0]["expires_at"] is None

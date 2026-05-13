@@ -45,6 +45,12 @@ _DEFAULTS: dict = {
     "semantic_threshold": 0.65,
     "divergence_rate": 0.05,
     "decay_rate": 0.95,
+    "utility_weights": {
+        "reactivation": 0.4,
+        "importance": 0.3,
+        "density": 0.2,
+        "relevance": 0.1,
+    },
 }
 
 
@@ -119,6 +125,52 @@ def _apply_decay(score: float, days_dormant: int, rate: float = 0.95) -> float:
     """
     decayed = score * (rate ** max(0, days_dormant))
     return max(0.05, decayed)
+
+
+def compute_utility_score(
+    thread: dict,
+    density: float,
+    relevance_score: float = 0.0,
+    weights: dict | None = None,
+) -> float:
+    """Return a composite utility score for *thread* used to rank candidates.
+
+    Formula::
+
+        U = w_r * reactivation_score
+          + w_i * importance_score
+          + w_d * density
+          + w_v * relevance_score
+
+    Weights are loaded from ``[cognitive_initiative_gate.utility_weights]`` in
+    arke.toml and can be overridden via the *weights* parameter (useful in
+    tests).
+
+    Args:
+        thread: Dict with ``reactivation_score`` and ``importance_score`` keys.
+        density: Current interaction density (0.0–1.0) from
+            :func:`compute_interaction_density`.
+        relevance_score: Optional semantic relevance score (0.0–1.0).
+            Defaults to 0.0 when semantic_anchor is disabled.
+        weights: Optional weight dict overriding arke.toml values.
+
+    Returns:
+        Composite score in [0.0, 1.0] (not clamped, but inputs are already
+        normalised so the result stays in range under normal conditions).
+    """
+    cfg = _get_config()
+    w = dict(cfg.get("utility_weights", _DEFAULTS["utility_weights"]))
+    if weights:
+        w.update(weights)
+
+    r = float(thread.get("reactivation_score") or 0.0)
+    i = float(thread.get("importance_score") or 0.0)
+    return (
+        w.get("reactivation", 0.4) * r
+        + w.get("importance", 0.3) * i
+        + w.get("density", 0.2) * density
+        + w.get("relevance", 0.1) * relevance_score
+    )
 
 
 def compute_interaction_density(mm: object) -> float:
@@ -411,6 +463,12 @@ def cognitive_initiative_engine(
         # No divergent thread available → fall through to normal contextual path
 
     thread = eligible[0]  # highest reactivation_score (sorted by query)
+
+    # Rank eligible threads by composite utility score (Phase 2)
+    thread = max(
+        eligible,
+        key=lambda t: compute_utility_score(t, density),
+    )
 
     # Gate 3: contextual anchor
     if not is_contextually_anchored(thread, context):

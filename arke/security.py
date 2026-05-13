@@ -35,7 +35,8 @@ def _load_whitelist() -> frozenset[str]:
 def check_command(command: str) -> None:
     """Raise ``ValueError`` if *command* is not in the whitelist.
 
-    Parses the first token of the command string as the executable name.
+    Parses the first executable token (skipping variable assignments,
+    operators, and redirections).
 
     Args:
         command: Full shell command string.
@@ -56,14 +57,33 @@ def check_command(command: str) -> None:
     if not tokens:
         raise ValueError("Empty command")
 
-    base = Path(tokens[0]).name  # strip any path prefix
-    if base not in whitelist:
+    # Skip variable assignments, operators, and redirections to find first executable
+    shell_operators = {"&&", "||", ";", "|", "&", ">", ">>", "<", "2>"}
+    base_cmd = None
+    for token in tokens:
+        # Skip operators and redirections
+        if token in shell_operators:
+            continue
+        # Skip variable assignments (contains '=' but not in a path)
+        if "=" in token and not token.startswith("/") and not token.startswith("./"):
+            continue
+        # Skip redirections like > or >>
+        if token.startswith((">", "<")):
+            continue
+        # This should be the first actual command
+        base_cmd = Path(token).name  # strip any path prefix
+        break
+
+    if not base_cmd:
+        raise ValueError(f"No executable found in command: {command!r}")
+
+    if base_cmd not in whitelist:
         log.error(
             "security.blocked",
             command=command,
-            base=base,
+            base=base_cmd,
         )
         raise ValueError(
-            f"Command '{base}' is not in the security whitelist. "
+            f"Command '{base_cmd}' is not in the security whitelist. "
             "Add it to config/security.toml if intentional."
         )

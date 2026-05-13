@@ -126,6 +126,8 @@ class LiteLLMManager:
         self, provider_key: str, prompt: str, max_tokens: int
     ) -> tuple[str, float, int]:
         import litellm  # lazy import
+        import logging
+        logging.getLogger("litellm").setLevel(logging.ERROR)  # Suppress non-blocking warnings
 
         model_cfg = self._config.get("models", {}).get(provider_key, {})
         model_name: str = model_cfg.get("model", provider_key)
@@ -244,6 +246,8 @@ class LiteLLMManager:
     ):
         """Stream tokens from a specific provider."""
         import litellm  # lazy import
+        import logging
+        logging.getLogger("litellm").setLevel(logging.ERROR)  # Suppress non-blocking warnings
 
         model_cfg = self._config.get("models", {}).get(provider_key, {})
         model_name: str = model_cfg.get("model", provider_key)

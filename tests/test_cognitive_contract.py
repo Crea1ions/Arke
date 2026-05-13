@@ -27,35 +27,35 @@ class TestCognitiveContractStructure:
             pytest.fail(f"Contract JSON is invalid: {e}")
 
     def test_contract_has_session_section(self):
-        """Contract must have session section with id, conversation_id, timestamp."""
+        """Contract must have runtime section with session_id, turn_id, timestamp."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        assert "session" in contract
-        assert "id" in contract["session"]
-        assert "conversation_id" in contract["session"]
-        assert "timestamp" in contract["session"]
+
+        assert "runtime" in contract
+        assert "session_id" in contract["runtime"]
+        assert "turn_id" in contract["runtime"]
+        assert "timestamp" in contract["runtime"]
 
     def test_session_ids_are_uuids(self):
-        """Session and conversation IDs must be UUID format."""
+        """session_id and turn_id must be UUID format."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        session_id = contract["session"]["id"]
-        conv_id = contract["session"]["conversation_id"]
-        
+
+        session_id = contract["runtime"]["session_id"]
+        turn_id = contract["runtime"]["turn_id"]
+
         # UUID v4 format check (simple regex)
         uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         import re
         assert re.match(uuid_pattern, session_id), f"Invalid session ID: {session_id}"
-        assert re.match(uuid_pattern, conv_id), f"Invalid conversation ID: {conv_id}"
+        assert re.match(uuid_pattern, turn_id), f"Invalid turn ID: {turn_id}"
 
     def test_timestamp_is_iso8601(self):
         """Timestamp must be ISO 8601 format."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        timestamp = contract["session"]["timestamp"]
+
+        timestamp = contract["runtime"]["timestamp"]
         from datetime import datetime
         try:
             datetime.fromisoformat(timestamp)
@@ -67,85 +67,82 @@ class TestCognitiveContractStructure:
         user_msg = "This is a test message"
         contract_json = build_cognitive_context(user_msg)
         contract = json.loads(contract_json)
-        
+
         assert "input" in contract
-        assert contract["input"] == user_msg
+        assert contract["input"]["user_message"] == user_msg
 
     def test_contract_has_hierarchy(self):
-        """Contract must have 5-level hierarchy."""
+        """Contract must expose mode and contract rules (replaces hierarchy)."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        assert "hierarchy" in contract
-        hierarchy = contract["hierarchy"]
-        
-        # Check all 5 levels present
-        assert "0_direct_response" in hierarchy
-        assert "1_local_light" in hierarchy
-        assert "2_skills_local" in hierarchy
-        assert "3_vector_local" in hierarchy
-        assert "4_mcp_external" in hierarchy
+
+        # New structure: mode in runtime, rules in contract (from schema)
+        assert "runtime" in contract
+        assert "mode" in contract["runtime"]
+        assert "contract" in contract
 
     def test_contract_has_mantra(self):
-        """Contract must include execution mantra."""
+        """Contract must include a scope declaration per mode."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        assert "mantra" in contract
-        assert "simplest-first" in contract["mantra"]
-        assert "local-first" in contract["mantra"]
-        assert "MCP-last" in contract["mantra"]
+
+        # 'scope' replaces 'mantra' in the new mode-schema architecture
+        assert "scope" in contract
+        assert len(contract["scope"]) > 10
 
     def test_contract_has_constraints(self):
-        """Contract must have 3 invariant constraints."""
+        """Contract must have behavioral rules in contract.rules."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        assert "constraints" in contract
-        constraints = contract["constraints"]
-        
-        assert "agent_decides_everything" in constraints
-        assert "system_never_interprets" in constraints
-        assert "system_never_executes_without_llm_intent" in constraints
-        
-        # All constraints should be True
-        assert constraints["agent_decides_everything"] is True
-        assert constraints["system_never_interprets"] is True
-        assert constraints["system_never_executes_without_llm_intent"] is True
+
+        # Rules now live inside contract.rules (from mode schema)
+        assert "contract" in contract
+        assert "rules" in contract["contract"]
+        rules = contract["contract"]["rules"]
+        assert "no_confirmation" in rules
+        assert "no_plumbing" in rules
+        assert rules["no_confirmation"] is True
+        assert rules["no_plumbing"] is True
+
+    def test_contract_has_capability_reference_pointer(self):
+        """Contract must not embed MCP server details."""
+        contract_json = build_cognitive_context("Test message")
+        contract = json.loads(contract_json)
+
+        # mcp_servers must never be embedded in the context JSON
+        assert "mcp_servers" not in contract
 
 
 class TestCognitiveContextGeneration:
     """Test context generation and session ID handling."""
 
     def test_generated_session_id_is_unique(self):
-        """Each context generation should have unique session ID."""
+        """Each context generation should have a unique session ID."""
         contract1_json = build_cognitive_context("msg1")
         contract2_json = build_cognitive_context("msg2")
-        
+
         contract1 = json.loads(contract1_json)
         contract2 = json.loads(contract2_json)
-        
-        # Session IDs should be different (unless very unlikely UUID collision)
-        assert contract1["session"]["id"] != contract2["session"]["id"]
+
+        assert contract1["runtime"]["session_id"] != contract2["runtime"]["session_id"]
 
     def test_conversation_id_different_from_session_id(self):
-        """Conversation ID and session ID must be different."""
+        """session_id and turn_id must be different UUIDs."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
-        
-        session_id = contract["session"]["id"]
-        conv_id = contract["session"]["conversation_id"]
-        
-        # They should be different UUIDs
-        assert session_id != conv_id
+
+        session_id = contract["runtime"]["session_id"]
+        turn_id = contract["runtime"]["turn_id"]
+
+        assert session_id != turn_id
 
     def test_provided_session_id_is_used(self):
         """When session_id is provided, it should be used (not regenerated)."""
         provided_session_id = "12345678-1234-1234-1234-123456789abc"
         contract_json = build_cognitive_context("Test message", session_id=provided_session_id)
         contract = json.loads(contract_json)
-        
-        assert contract["session"]["id"] == provided_session_id
+
+        assert contract["runtime"]["session_id"] == provided_session_id
 
     def test_input_message_reflected_in_contract(self):
         """User input should be reflected in the contract."""
@@ -154,11 +151,11 @@ class TestCognitiveContextGeneration:
             "List files in /tmp",
             "What is the capital of France?",
         ]
-        
+
         for msg in messages:
             contract_json = build_cognitive_context(msg)
             contract = json.loads(contract_json)
-            assert contract["input"] == msg
+            assert contract["input"]["user_message"] == msg
 
 
 class TestCognitiveContractInjection:
@@ -169,10 +166,9 @@ class TestCognitiveContractInjection:
         try:
             contract_json = build_cognitive_context("Test message")
             contract = json.loads(contract_json)
-            assert "session" in contract
+            assert "runtime" in contract
             assert "input" in contract
-            assert "hierarchy" in contract
-            assert "constraints" in contract
+            assert "contract" in contract
         except Exception as e:
             pytest.fail(f"Contract building failed: {e}")
 
@@ -184,8 +180,7 @@ class TestTokenOverhead:
         """Contract JSON should be reasonably sized."""
         contract_json = build_cognitive_context("A test message")
         
-        # Contract includes 5 MCP server definitions (~4000 chars)
-        assert len(contract_json) < 8000, "Contract JSON unexpectedly large"
+        assert len(contract_json) < 2500, "Contract JSON unexpectedly large"
         assert len(contract_json) > 100, "Contract JSON unexpectedly small"
 
     def test_token_overhead_estimate(self):
@@ -202,9 +197,7 @@ class TestTokenOverhead:
         # Calculate overhead percentage
         overhead_pct = (contract_tokens / typical_system_prompt_tokens) * 100
         
-        # Overhead is acceptable if < 600% — contract includes 5 MCP server definitions
-        # which add significant but valuable context (tool names, params, formats)
-        assert overhead_pct < 600, f"Token overhead too high: {overhead_pct:.1f}%"
+        assert overhead_pct < 200, f"Token overhead too high: {overhead_pct:.1f}%"
         
         # Log estimated overhead for reference
         assert contract_tokens > 0, "Contract has no tokens"
