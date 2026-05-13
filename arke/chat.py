@@ -355,9 +355,12 @@ class StreamingMarkdownDisplay:
         self._renderer = MarkdownRenderer(show_internal_markup=show_internal_markup)
 
     def add_token(self, token: str) -> None:
-        """Emit token immediately (streaming behavior).
+        """Emit token with streaming + per-line markdown styling.
         
-        Apply styling to complete lines, filter markup from all output.
+        PRAGMATIC: Emit each complete line immediately for real-time streaming.
+        Apply markdown styling to each line for structure (headers, bold, etc.).
+        Trade-off: Multi-line patterns (bold across 2+ lines) won't fully style,
+        but single-line patterns work great. Session 034 will improve this.
         """
         # Normalize line endings
         token = token.replace("\r\n", "\n").replace("\r", "")
@@ -368,34 +371,33 @@ class StreamingMarkdownDisplay:
             self._on_first_token()
             self._started = True
 
-        # Accumulate for line-by-line rendering
+        # Accumulate for line processing
         self._pending += token
 
-        # Process complete lines (ending with \n)
+        # Process each complete line immediately
         while "\n" in self._pending:
             line_end = self._pending.index("\n")
             line = self._pending[:line_end]
             self._pending = self._pending[line_end + 1:]
 
-            # Render this line with styling (also filters internal markup)
+            # Render this line with markdown styling
+            # (headers, single-line bold, code, etc. style well)
             try:
                 styled = self._renderer.render(line) if line else ""
             except Exception:  # noqa: BLE001
                 styled = line
 
             # Apply line prefix
-            visible = styled
             if self._line_prefix:
-                visible = self._line_prefix + visible
+                styled = self._line_prefix + styled
 
-            # Emit with newline (streaming!)
-            sys.stdout.write(visible + "\n")
+            # Emit immediately (streaming!)
+            sys.stdout.write(styled + "\n")
             sys.stdout.flush()
             self._at_line_start = True
 
-        # Emit any remaining partial content (unstyled, but still filter markup)
+        # Handle any remaining partial line (at end of response)
         if self._pending:
-            # Filter out internal markup even for partial content
             visible = self._pending if self._show_internal_markup else self._strip_markup(self._pending)
             if self._line_prefix and self._at_line_start:
                 visible = self._line_prefix + visible
