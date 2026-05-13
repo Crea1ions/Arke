@@ -44,7 +44,6 @@ SLASH_COMMANDS: dict[str, str] = {
     "/status": "État réel du système (bases, skills, mémoire, providers)",
     "/config": "Configuration interactive (LLM, télémétrie, sandbox, vectoriel)",
     "/check":  "Vérifie l'état de chaque composant (providers, bwrap, sqlite-vec, OTel)",
-    "/debug":  "Active/désactive le mode debug sessionnel (/debug [on|off|rendering])",
     "/model":  "Sélecteur de modèle LLM interactif",
     "/memory": "Affiche les notes mémorisées de la session",
     "/about":  "À propos d'Arke (architecture, philosophie)",
@@ -113,6 +112,9 @@ def route(raw: str) -> RouteResult:
     # --- Slash command -------------------------------------------------------
     first_word = text.split()[0].lower() if text.split() else ""
     if first_word in SLASH_COMMANDS:
+        return RouteResult(kind=RouteKind.SLASH, slash=first_word, intention=text)
+    # Unknown slash command — route as SLASH so the REPL can show "commande inconnue"
+    if first_word.startswith("/"):
         return RouteResult(kind=RouteKind.SLASH, slash=first_word, intention=text)
 
     # --- @model override -------------------------------------------------------
