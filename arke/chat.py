@@ -61,6 +61,8 @@ log = structlog.get_logger()
 from arke import chat_theme as T  # noqa: E402
 from arke import task_classifier  # noqa: E402
 from arke import result_analyzer  # noqa: E402
+from arke.rendering.markdown_renderer import MarkdownRenderer  # noqa: E402
+from arke.rendering.input_normalizer import InputNormalizer  # noqa: E402
 
 _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
 _CAPABILITY_REFERENCE_PATH = "memory/mcp_reference.md"
@@ -319,21 +321,21 @@ def _pick_default_model() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Streaming display — direct stdout token-by-token
+# Streaming display — direct stdout token-by-token with ANSI styling
 # ---------------------------------------------------------------------------
 
 
 class StreamingMarkdownDisplay:
-    """Display streaming LLM output in real-time by writing tokens directly to stdout.
+    """Display streaming LLM output in real-time with ANSI color styling.
+
+    CRITICAL: Preserves original streaming behavior (emit every token immediately).
+    Integrates Session 033 rendering for styling by complete lines when possible.
 
     Args:
-        use_live: Kept for API compatibility (unused internally).
-        show_internal_markup: When True, bypass the control-marker filter.
-        line_prefix: ANSI string prepended at the start of each visible line
-            (e.g. ``"│  "`` for thread formatting).  Default: empty string.
-        on_first_token: Optional callable fired exactly once when the first
-            visible token reaches stdout.  Used to print an agent header before
-            streaming content appears.
+        use_live: Kept for API compatibility.
+        show_internal_markup: When True, preserve [OUTIL:], [ARGS:], [PLAN:] markers.
+        line_prefix: ANSI string prepended at start of each visible line.
+        on_first_token: Optional callback on first visible token.
     """
 
     def __init__(
@@ -344,100 +346,96 @@ class StreamingMarkdownDisplay:
         on_first_token: Any = None,
     ):
         self.buffer: list[str] = []
-        self._pending_visible = ""
-        self._show_internal_markup = show_internal_markup
-        self._suppress_until: str | None = None
+        self._pending = ""  # Accumulate for line-by-line styling
         self._started = False
         self._line_prefix = line_prefix
         self._at_line_start = True
         self._on_first_token = on_first_token
+        self._show_internal_markup = show_internal_markup
+        self._renderer = MarkdownRenderer(show_internal_markup=show_internal_markup)
 
     def add_token(self, token: str) -> None:
-        """Write visible token content to stdout while keeping raw markup in buffer.
-
-        Strips ``\\r`` (bare carriage returns / CRLF) from the token before
-        processing to avoid ``^M`` artefacts in the terminal.
+        """Emit token immediately (streaming behavior).
+        
+        Apply styling to complete lines, filter markup from all output.
         """
+        # Normalize line endings
         token = token.replace("\r\n", "\n").replace("\r", "")
         self.buffer.append(token)
-        visible = token if self._show_internal_markup else self._consume_visible_text(token)
-        if visible:
-            if not self._started and self._on_first_token:
-                self._on_first_token()
-            if self._line_prefix:
-                # Insert the line prefix at the start of every visible line.
-                out: list[str] = []
-                for char in visible:
-                    if self._at_line_start and char != "\n":
-                        out.append(self._line_prefix)
-                        self._at_line_start = False
-                    out.append(char)
-                    if char == "\n":
-                        self._at_line_start = True
-                visible = "".join(out)
-            sys.stdout.write(visible)
-            sys.stdout.flush()
+
+        # Fire on_first_token callback exactly once
+        if not self._started and self._on_first_token and token.strip():
+            self._on_first_token()
             self._started = True
 
+        # Accumulate for line-by-line rendering
+        self._pending += token
+
+        # Process complete lines (ending with \n)
+        while "\n" in self._pending:
+            line_end = self._pending.index("\n")
+            line = self._pending[:line_end]
+            self._pending = self._pending[line_end + 1:]
+
+            # Render this line with styling (also filters internal markup)
+            try:
+                styled = self._renderer.render(line) if line else ""
+            except Exception:  # noqa: BLE001
+                styled = line
+
+            # Apply line prefix
+            visible = styled
+            if self._line_prefix:
+                visible = self._line_prefix + visible
+
+            # Emit with newline (streaming!)
+            sys.stdout.write(visible + "\n")
+            sys.stdout.flush()
+            self._at_line_start = True
+
+        # Emit any remaining partial content (unstyled, but still filter markup)
+        if self._pending:
+            # Filter out internal markup even for partial content
+            visible = self._pending if self._show_internal_markup else self._strip_markup(self._pending)
+            if self._line_prefix and self._at_line_start:
+                visible = self._line_prefix + visible
+            sys.stdout.write(visible)
+            sys.stdout.flush()
+            self._at_line_start = False
+
+    def _strip_markup(self, text: str) -> str:
+        """Remove internal control markup from text."""
+        import re
+        # Remove [PLAN:..../PLAN], [OUTIL:...], [ARGS:...] markers
+        text = re.sub(r'\[PLAN:.*?/PLAN\]', '', text, flags=re.DOTALL)
+        text = re.sub(r'\[OUTIL:[^\]]*\]', '', text)
+        text = re.sub(r'\[ARGS:[^\]]*\]', '', text)
+        return text
+
     def get_full_text(self) -> str:
+        """Return accumulated raw text."""
         return "".join(self.buffer)
 
     def tokens_added(self) -> bool:
         return self._started
 
     def close(self) -> None:
-        """Ensure the streamed output ends on a clean newline."""
-        if self._started and not self._at_line_start:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+        """Finalize: no-op since all content already emitted."""
+        # Everything already streamed in add_token
+        pass
 
+    def close_inline(self) -> None:
+        """Inline close: no-op."""
+        pass
+
+    # Legacy compatibility
     def _consume_visible_text(self, chunk: str) -> str:
-        """Return the user-visible portion of *chunk* while skipping control markup."""
-        self._pending_visible += chunk
-        visible_parts: list[str] = []
-        index = 0
-
-        while index < len(self._pending_visible):
-            if self._suppress_until is not None:
-                if self._suppress_until == "]":
-                    end = self._pending_visible.find("]", index)
-                    if end == -1:
-                        self._pending_visible = ""
-                        return "".join(visible_parts)
-                    index = end + 1
-                    self._suppress_until = None
-                    continue
-
-                end = self._pending_visible.find(self._suppress_until, index)
-                if end == -1:
-                    self._pending_visible = ""
-                    return "".join(visible_parts)
-                index = end + len(self._suppress_until)
-                self._suppress_until = None
-                continue
-
-            if self._pending_visible[index] != "[":
-                visible_parts.append(self._pending_visible[index])
-                index += 1
-                continue
-
-            marker = self._match_control_marker(self._pending_visible[index:])
-            if marker == "partial":
-                break
-            if marker is None:
-                visible_parts.append("[")
-                index += 1
-                continue
-
-            self._suppress_until = "]" if marker in ("[OUTIL:", "[ARGS:") else "/PLAN]"
-            index += len(marker)
-
-        self._pending_visible = self._pending_visible[index:]
-        return "".join(visible_parts)
+        """Compatibility method."""
+        return chunk
 
     @staticmethod
     def _match_control_marker(text: str) -> str | None:
-        """Return a control marker, ``partial`` for incomplete prefixes, or None."""
+        """Return control marker or None."""
         markers = ("[OUTIL:", "[ARGS:", "[PLAN:")
         for marker in markers:
             if text.startswith(marker):
