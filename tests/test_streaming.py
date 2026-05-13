@@ -146,6 +146,7 @@ def test_streaming_display_hides_internal_markers_from_stdout():
         display.add_token("[OUTIL: sqlite]\n")
         display.add_token("[ARGS: {\"db\": \"session\"}]")
         display.add_token("\nRésultat prêt")
+        display.close()
 
     visible = "".join(call.args[0] for call in mock_write.call_args_list)
     assert "Analyse en cours" in visible

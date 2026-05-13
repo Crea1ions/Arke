@@ -58,19 +58,11 @@ class SkillRegistry:
         Returns:
             UUID string of the ``skills`` row (new or existing).
         """
-        existing = self._mem.query(
-            "global",
-            "SELECT id FROM skills WHERE name = ? LIMIT 1",
-            (template.name,),
-        )
-        if existing:
-            return existing[0]["id"]
-
         skill_id = str(uuid.uuid4())
         self._mem.query(
             "global",
             """
-            INSERT INTO skills (id, name, description, prompt_template, tool)
+            INSERT OR IGNORE INTO skills (id, name, description, prompt_template, tool)
             VALUES (?, ?, ?, ?, ?)
             """,
             (
@@ -81,7 +73,12 @@ class SkillRegistry:
                 template.tool,
             ),
         )
-        return skill_id
+        row = self._mem.query(
+            "global",
+            "SELECT id FROM skills WHERE name = ? LIMIT 1",
+            (template.name,),
+        )
+        return row[0]["id"]
 
     # ------------------------------------------------------------------
     # Listing

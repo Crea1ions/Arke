@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS tool_usage (
 
 CREATE TABLE IF NOT EXISTS skills (
     id              TEXT PRIMARY KEY,
-    name            TEXT      NOT NULL,
+    name            TEXT      NOT NULL UNIQUE,
     description     TEXT,
     prompt_template TEXT,
     tool            TEXT,
