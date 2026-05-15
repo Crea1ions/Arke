@@ -1,7 +1,7 @@
 """arke/mode_manager.py — Source unique de vérité pour la gestion des modes agent.
 
 Centralise :
-- état courant du mode (ask | search | plan | dev)
+- état courant du mode (ask | search | plan | agent)
 - matrice de permissions par mode
 - chargement des schémas JSON d'entrée par mode
 - construction du contexte d'entrée injecté dans chaque appel LLM
@@ -18,7 +18,7 @@ from pathlib import Path
 # Constantes
 # ---------------------------------------------------------------------------
 
-_VALID_MODES: frozenset[str] = frozenset({"ask", "search", "plan", "dev"})
+_VALID_MODES: frozenset[str] = frozenset({"ask", "search", "plan", "agent"})
 _DEFAULT_MODE: str = "ask"
 _SCHEMAS_DIR: Path = Path(__file__).parent.parent / "config" / "mode_schemas"
 
@@ -38,7 +38,7 @@ def set_mode(mode: str) -> None:
     """Définit le mode agent actif.
 
     Args:
-        mode: Un des modes valides : ask | search | plan | dev.
+        mode: Un des modes valides : ask | search | plan | agent.
 
     Raises:
         ValueError: Si le mode n'est pas dans _VALID_MODES.
@@ -57,7 +57,7 @@ def is_valid_mode(mode: str) -> bool:
 # Matrice de permissions par mode
 # ---------------------------------------------------------------------------
 
-#: Tools permitted per mode. ``None`` means unrestricted (dev mode).
+#: Tools permitted per mode. ``None`` means unrestricted (agent mode).
 MODE_PERMISSIONS: dict[str, frozenset[str] | None] = {
     "ask":    frozenset(),  # aucun outil
     "search": frozenset({
@@ -68,7 +68,7 @@ MODE_PERMISSIONS: dict[str, frozenset[str] | None] = {
         "sqlite", "memory_fts", "memory_read", "memory_search",
         "memory_write", "memory_forget", "vector_search",
     }),
-    "dev":    None,  # accès complet
+    "agent":  None,  # accès complet
 }
 
 
@@ -77,13 +77,13 @@ def can_execute_tool(tool_name: str, mode: str) -> bool:
 
     Args:
         tool_name: Identifiant de l'outil (cli, fs, sqlite, mcp, …)
-        mode: Clé du mode agent (ask, search, plan, dev).
+        mode: Cle du mode agent (ask, search, plan, agent).
 
     Returns:
         True si l'exécution est autorisée, False si bloquée.
     """
     allowed = MODE_PERMISSIONS.get(mode, frozenset())
-    if allowed is None:  # mode dev — accès complet
+    if allowed is None:  # mode agent — accès complet
         return True
     return tool_name in allowed
 
@@ -99,7 +99,7 @@ def load_mode_schema(mode: str) -> dict:
     si le fichier est absent (dégradé gracieux).
 
     Args:
-        mode: Clé du mode agent (ask, search, plan, dev).
+        mode: Clé du mode agent (ask, search, plan, agent).
 
     Returns:
         Dict du schéma chargé, ou {} si absent.
@@ -118,6 +118,7 @@ def build_input_context(
     user_message: str,
     session_id: str = "",
     history: list | None = None,
+    workspace_root: str | None = None,
 ) -> str:
     """Construit le contexte JSON injecté avant chaque appel LLM.
 
@@ -126,7 +127,7 @@ def build_input_context(
     commun forcé au-delà du strict minimum runtime.
 
     Args:
-        mode: Mode agent actif (ask | search | plan | dev).
+        mode: Mode agent actif (ask | search | plan | agent).
         user_message: Message brut de l'utilisateur.
         session_id: ID de session (généré si absent).
         history: Historique de conversation (optionnel).
@@ -151,6 +152,8 @@ def build_input_context(
             "history_length": len(history) if history else 0,
         },
     }
+    if workspace_root:
+        context["runtime"]["WORKSPACE_ROOT"] = workspace_root
 
     # Fusionner avec le schéma du mode (le schéma enrichit le contexte)
     if schema:

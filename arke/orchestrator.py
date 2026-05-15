@@ -116,17 +116,18 @@ def _initialize_workspace_once(ctx: dict[str, Any]) -> None:
         return
     
     try:
-        # Get WCU root from context or use default
-        wcu_root = ctx.get("wcu_root")
+        # Legacy WCU is opt-in: only initialize when an explicit root exists.
+        wcu_root = ctx.get("wcu_root") or ctx.get("workspace_wcu_root")
         if not wcu_root:
-            # Default to arke-workspace/WCU in project root
-            from pathlib import Path
-            project_root = Path(__file__).parent.parent
-            wcu_root = project_root / "arke-workspace" / "WCU"
-        
-        wcu_root = Path(wcu_root)
-        
-        # Initialize workspace manager
+            log.info("workspace.skipped_no_root")
+            return
+
+        wcu_root = Path(wcu_root).expanduser()
+        if not wcu_root.exists():
+            log.info("workspace.skipped_missing_root", wcu_root=str(wcu_root))
+            return
+
+        # Initialize workspace manager without creating anything implicitly.
         workspace.initialize_workspace(wcu_root)
         _workspace_initialized = True
         log.info("workspace.initialized", wcu_root=str(wcu_root))
@@ -220,21 +221,21 @@ def _traced_dispatch(step: Step, ctx: dict[str, Any], task: Task) -> Any:
 def _dispatch(step: Step, ctx: dict[str, Any], task: Task) -> Any:  # noqa: ARG001
     """Route step execution to the correct executor."""
     # Agent mode gating: block execution if tool not permitted in current mode.
-    # Default to "dev" when agent_mode is absent (backward compat for direct calls).
-    mode = ctx.get("agent_mode", "dev")
+    # Backward compatibility for direct orchestrator calls uses unrestricted agent mode.
+    mode = ctx.get("agent_mode", "agent")
     if not can_execute_tool(step.tool, mode):
         return {
             "return_code": 1,
             "stdout": "",
             "stderr": (
                 f"[Mode /{mode}] Outil '{step.tool}' non autorisé. "
-                f"Utilisez /dev pour exécuter des outils système."
+                f"Utilisez /agent pour exécuter des outils système."
             ),
         }
     if step.tool == "cli":
-        return _exec_cli(step)
+        return _exec_cli(step, ctx)
     if step.tool == "fs":
-        return _exec_fs(step)
+        return _exec_fs(step, ctx)
     if step.tool == "sqlite":
         return _exec_sqlite(step)
     if step.tool == "memory_search":
@@ -256,12 +257,20 @@ def _dispatch(step: Step, ctx: dict[str, Any], task: Task) -> Any:  # noqa: ARG0
 # ---------------------------------------------------------------------------
 
 
-def _exec_cli(step: Step) -> dict[str, Any]:
+def _exec_cli(step: Step, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute a whitelisted shell command inside a bubblewrap sandbox."""
-    from arke.security import check_command  # lazy import to avoid circular
+    from arke.security import check_command, normalize_cli_command_paths  # lazy import to avoid circular
     from arke.sandbox import load_sandbox_config, sandboxed_run
 
     command: str = step.arguments["command"]
+    run_ctx = ctx or {}
+    workspace_root = run_ctx.get("WORKSPACE_ROOT")
+
+    try:
+        command = normalize_cli_command_paths(command, workspace_root)
+    except ValueError as exc:
+        return {"return_code": 1, "stdout": "", "stderr": str(exc)}
+
     try:
         check_command(command)  # raises ValueError if not whitelisted
     except ValueError as exc:
@@ -269,23 +278,60 @@ def _exec_cli(step: Step) -> dict[str, Any]:
 
     cfg = load_sandbox_config()
     sandbox_enabled: bool = cfg.get("enabled", True)
-    return sandboxed_run(command, timeout=30, sandbox_enabled=sandbox_enabled)
+    return sandboxed_run(
+        command,
+        timeout=30,
+        sandbox_enabled=sandbox_enabled,
+        workspace_root=workspace_root,
+    )
 
 
-def _exec_fs(step: Step) -> dict[str, Any]:
+def _exec_fs(step: Step, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
     """Read a file or list a directory from the filesystem."""
     import os
+    from arke.security import is_blacklisted_path, is_safe_path
 
     path: str = step.arguments["path"]
+    run_ctx = ctx or {}
+    workspace_root = run_ctx.get("WORKSPACE_ROOT")
 
-    if not os.path.exists(path):
+    resolved_path = path
+    if workspace_root:
+        root = Path(workspace_root)
+        candidate = Path(path)
+        if candidate.is_absolute():
+            if str(candidate) == "/workspace":
+                resolved_path = str(root)
+            elif str(candidate).startswith("/workspace/"):
+                rel = Path(str(candidate).removeprefix("/workspace/"))
+                resolved_path = str((root / rel).resolve(strict=False))
+            else:
+                resolved_path = str(candidate)
+        else:
+            resolved_path = str(root / candidate)
+
+        if not is_safe_path(resolved_path, workspace_root):
+            return {
+                "return_code": 1,
+                "stdout": "",
+                "stderr": f"Path blocked outside workspace: {path}",
+            }
+
+    if is_blacklisted_path(resolved_path):
+        return {
+            "return_code": 1,
+            "stdout": "",
+            "stderr": f"Path blocked by security policy: {path}",
+        }
+
+    if not os.path.exists(resolved_path):
         return {"return_code": 1, "stdout": "", "stderr": f"File not found: {path}"}
 
-    if os.path.isdir(path):
-        entries = sorted(os.listdir(path))
+    if os.path.isdir(resolved_path):
+        entries = sorted(os.listdir(resolved_path))
         return {"return_code": 0, "stdout": "\n".join(entries), "stderr": ""}
 
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(resolved_path, "r", encoding="utf-8") as fh:
         content = fh.read()
     return {"return_code": 0, "stdout": content, "stderr": ""}
 

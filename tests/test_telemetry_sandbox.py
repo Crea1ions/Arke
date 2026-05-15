@@ -250,6 +250,19 @@ def test_sandboxed_run_disabled_fallback():
     assert isinstance(result["stderr"], str)
 
 
+def test_sandboxed_run_disabled_uses_workspace_root(tmp_path):
+    """When sandbox is disabled, subprocess cwd follows workspace_root."""
+    from arke.sandbox import sandboxed_run
+
+    result = sandboxed_run(
+        "pwd",
+        sandbox_enabled=False,
+        workspace_root=tmp_path,
+    )
+    assert result["return_code"] == 0
+    assert result["stdout"].strip() == str(tmp_path)
+
+
 def test_sandboxed_run_warns_when_bwrap_missing(monkeypatch):
     """sandboxed_run warns and falls back when bwrap unavailable."""
     import arke.sandbox as sb
@@ -279,6 +292,97 @@ def test_sandboxed_run_with_bwrap():
     result = sandboxed_run("echo hello-from-sandbox", sandbox_enabled=True)
     assert result["return_code"] == 0
     assert "hello-from-sandbox" in result["stdout"]
+
+
+def test_sandboxed_run_fallback_on_bwrap_permission_error(monkeypatch, tmp_path):
+    """bwrap capability error (RTM_NEWADDR) should fallback to unsandboxed workspace run."""
+    import arke.sandbox as sb
+
+    monkeypatch.setattr(sb, "_bwrap_available", True)
+    monkeypatch.setattr(sb, "load_sandbox_config", lambda: {"mode": "workspace"})
+    monkeypatch.setattr(sb, "_load_allowed_dirs", lambda: [])
+
+    calls: list[dict] = []
+
+    def _fake_run(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        # First call: bwrap failure
+        if len(calls) == 1:
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+                },
+            )()
+        # Second call: unsandboxed fallback success
+        return type(
+            "R",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "ok-fallback\n",
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(sb.subprocess, "run", _fake_run)
+
+    result = sb.sandboxed_run("echo ok-fallback", sandbox_enabled=True, workspace_root=tmp_path)
+
+    assert result["return_code"] == 0
+    assert "ok-fallback" in result["stdout"]
+    # Ensure we did run fallback path (2 subprocess calls)
+    assert len(calls) == 2
+    # Fallback call should be shell execution in workspace cwd
+    assert calls[1]["kwargs"].get("shell") is True
+    assert calls[1]["kwargs"].get("cwd") == str(tmp_path)
+
+
+def test_sandboxed_run_fallback_remaps_workspace_alias(monkeypatch, tmp_path):
+    """Fallback must rewrite /workspace paths to host workspace path."""
+    import arke.sandbox as sb
+
+    monkeypatch.setattr(sb, "_bwrap_available", True)
+    monkeypatch.setattr(sb, "load_sandbox_config", lambda: {"mode": "workspace"})
+    monkeypatch.setattr(sb, "_load_allowed_dirs", lambda: [])
+
+    calls: list[dict] = []
+
+    def _fake_run(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        if len(calls) == 1:
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+                },
+            )()
+        return type(
+            "R",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "ok\n",
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(sb.subprocess, "run", _fake_run)
+
+    command = 'printf "x" > /workspace/MOC_project.md && cat /workspace/MOC_project.md'
+    result = sb.sandboxed_run(command, sandbox_enabled=True, workspace_root=tmp_path)
+
+    assert result["return_code"] == 0
+    assert len(calls) == 2
+    fallback_cmd = calls[1]["args"][0]
+    assert "/workspace/" not in fallback_cmd
+    assert str(tmp_path / "MOC_project.md") in fallback_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +594,25 @@ def test_orchestrator_exec_cli_sandbox_disabled(monkeypatch, tmp_path):
     result = orch._exec_cli(step)
     assert result["return_code"] == 0
     assert "sandbox-off" in result["stdout"]
+
+
+def test_initialize_workspace_once_skips_without_explicit_root(monkeypatch):
+    """Orchestrator must not auto-create or auto-sync WCU without explicit root."""
+    import arke.orchestrator as orch
+    import arke.workspace as ws
+
+    called = {"value": False}
+
+    def _fake_initialize_workspace(_root):
+        called["value"] = True
+        raise AssertionError("should not be called")
+
+    monkeypatch.setattr(ws, "initialize_workspace", _fake_initialize_workspace)
+    monkeypatch.setattr(orch, "_workspace_initialized", False)
+
+    orch._initialize_workspace_once({})
+
+    assert called["value"] is False
 
 
 def test_traced_dispatch_populates_span(monkeypatch):

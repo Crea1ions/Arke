@@ -271,6 +271,20 @@ def test_workspace_initialization(wcu_root):
     assert mgr2 is mgr  # Same instance
 
 
+def test_workspace_initialization_does_not_auto_create_missing_root(tmp_path):
+    """A missing WCU root must not be auto-created implicitly."""
+    from arke.workspace import initialize_workspace
+
+    missing_root = tmp_path / "missing-wcu"
+    assert not missing_root.exists()
+
+    mgr = initialize_workspace(missing_root)
+
+    assert mgr is not None
+    assert not missing_root.exists()
+    assert not mgr.validate_structure()
+
+
 # ===========================================================================
 # Test Suite 5: Stability Contract (Legacy Intents)
 # ===========================================================================

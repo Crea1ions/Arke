@@ -57,7 +57,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/ask":    "Mode analyse — aucun outil (défaut, le plus sûr)",
     "/search": "Mode recherche — lecture seule (SQLite, FTS, MCP)",
     "/plan":   "Mode planification — mémoire session uniquement",
-    "/dev":    "Mode développement — tous les outils disponibles",
+    "/agent":  "Mode exécution — tous les outils disponibles",
     # Workspace View System (WVS) commands — filtered from /help, only shown in /show_workspace
     "/show_workspace":     "Visualize entire workspace structure",
     "/show_mobile_notes":  "Details of mobile-notes (capture layer)",

@@ -1,4 +1,4 @@
-"""test_agent_modes.py — Tests for agent mode permission system (/ask /search /plan /dev).
+"""test_agent_modes.py — Tests for agent mode permission system (/ask /search /plan /agent).
 
 Tests cover:
 - MODE_PERMISSIONS matrix (can_execute_tool)
@@ -70,21 +70,21 @@ class TestModePermissions:
         assert not can_execute_tool("fs", "plan")
         assert not can_execute_tool("mcp", "plan")
 
-    def test_dev_allows_all_tools(self):
-        """Dev mode must permit every known tool."""
+    def test_agent_allows_all_tools(self):
+        """Agent mode must permit every known tool."""
         all_tools = [
             "cli", "fs", "sqlite", "mcp", "memory_write", "memory_forget",
             "memory_fts", "memory_read", "memory_search", "vector_search",
             "web_search", "rss_reader", "calculator",
         ]
         for tool in all_tools:
-            assert can_execute_tool(tool, "dev"), (
-                f"Expected tool '{tool}' to be allowed in 'dev' mode"
+            assert can_execute_tool(tool, "agent"), (
+                f"Expected tool '{tool}' to be allowed in 'agent' mode"
             )
 
-    def test_dev_allows_unknown_tool(self):
-        """Dev mode is unrestricted — even unknown tools should pass."""
-        assert can_execute_tool("any_future_tool", "dev")
+    def test_agent_allows_unknown_tool(self):
+        """Agent mode is unrestricted — even unknown tools should pass."""
+        assert can_execute_tool("any_future_tool", "agent")
 
     def test_unknown_mode_blocks_tools(self):
         """An unrecognised mode should default to deny."""
@@ -95,11 +95,11 @@ class TestModePermissions:
         assert "ask" in MODE_PERMISSIONS
         assert "search" in MODE_PERMISSIONS
         assert "plan" in MODE_PERMISSIONS
-        assert "dev" in MODE_PERMISSIONS
+        assert "agent" in MODE_PERMISSIONS
         # ask: empty frozenset
         assert MODE_PERMISSIONS["ask"] == frozenset()
-        # dev: None sentinel means unrestricted
-        assert MODE_PERMISSIONS["dev"] is None
+        # agent: None sentinel means unrestricted
+        assert MODE_PERMISSIONS["agent"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +119,11 @@ class TestModeSlashCommands:
     def test_slash_plan_registered(self):
         assert "/plan" in SLASH_COMMANDS
 
-    def test_slash_dev_registered(self):
-        assert "/dev" in SLASH_COMMANDS
+    def test_slash_agent_registered(self):
+        assert "/agent" in SLASH_COMMANDS
 
     def test_mode_commands_have_descriptions(self):
-        for cmd in ("/ask", "/search", "/plan", "/dev"):
+        for cmd in ("/ask", "/search", "/plan", "/agent"):
             desc = SLASH_COMMANDS.get(cmd, "")
             assert desc, f"Expected non-empty description for {cmd}"
 
@@ -146,10 +146,10 @@ class TestModeState:
         _chat._set_mode("ask")
         assert _chat._get_mode() == "ask"
 
-    def test_set_mode_to_dev(self):
+    def test_set_mode_to_agent(self):
         import arke.chat as _chat
-        _chat._set_mode("dev")
-        assert _chat._get_mode() == "dev"
+        _chat._set_mode("agent")
+        assert _chat._get_mode() == "agent"
 
     def test_set_mode_to_search(self):
         import arke.chat as _chat
@@ -163,8 +163,8 @@ class TestModeState:
 
     def test_mode_changes_are_isolated_to_module_state(self):
         import arke.chat as _chat
-        _chat._set_mode("dev")
-        assert _chat._get_mode() == "dev"
+        _chat._set_mode("agent")
+        assert _chat._get_mode() == "agent"
         _chat._set_mode("ask")
         assert _chat._get_mode() == "ask"
 
@@ -173,7 +173,7 @@ class TestModeState:
         assert "ask" in _chat._VALID_MODES
         assert "search" in _chat._VALID_MODES
         assert "plan" in _chat._VALID_MODES
-        assert "dev" in _chat._VALID_MODES
+        assert "agent" in _chat._VALID_MODES
         assert len(_chat._VALID_MODES) == 4
 
 
@@ -197,13 +197,13 @@ class TestModeCognitiveContext:
         ctx = json.loads(ctx_json)
         assert ctx["runtime"]["mode"] == "ask"
 
-    def test_dev_mode_in_context(self):
+    def test_agent_mode_in_context(self):
         import json
         import arke.chat as _chat
-        _chat._set_mode("dev")
+        _chat._set_mode("agent")
         ctx_json = _chat.build_cognitive_context("test message", "session-002")
         ctx = json.loads(ctx_json)
-        assert ctx["runtime"]["mode"] == "dev"
+        assert ctx["runtime"]["mode"] == "agent"
 
     def test_search_mode_in_context(self):
         import json
@@ -273,16 +273,16 @@ class TestOrchestratorGate:
         result = _dispatch(step, {"agent_mode": "plan"}, task)
         assert result["return_code"] == 1
 
-    def test_dev_mode_allows_cli(self, tmp_path):
-        """dev mode should not be blocked by the gate (actual execution tested elsewhere)."""
+    def test_agent_mode_allows_cli(self, tmp_path):
+        """agent mode should not be blocked by the gate (actual execution tested elsewhere)."""
         # We only test that the gate does NOT block — not that CLI executes successfully.
         # The function will attempt to run the command after passing the gate.
         from arke.mode_manager import can_execute_tool
-        assert can_execute_tool("cli", "dev") is True
+        assert can_execute_tool("cli", "agent") is True
 
-    def test_no_agent_mode_defaults_to_dev(self):
-        """Backward compat: missing agent_mode key in ctx defaults to dev (full access)."""
+    def test_no_agent_mode_defaults_to_agent(self):
+        """Backward compat: missing agent_mode key in ctx defaults to agent (full access)."""
         from arke.mode_manager import can_execute_tool
-        # Simulate what _dispatch does: ctx.get("agent_mode", "dev")
-        mode = {}.get("agent_mode", "dev")
+        # Simulate what _dispatch does: ctx.get("agent_mode", "agent")
+        mode = {}.get("agent_mode", "agent")
         assert can_execute_tool("cli", mode) is True

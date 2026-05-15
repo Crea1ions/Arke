@@ -113,8 +113,10 @@ class TestLearningCycleIntegration:
             )
         )
         
-        # Now create a skill from this learning
+        # Now create a skill from this learning with a unique name to avoid
+        # collisions when tests share the same sqlite database.
         skill_id = str(uuid.uuid4())
+        skill_name = f"file_analyzer_{skill_id[:8]}"
         mm.query(
             "global",
             """INSERT INTO skills (id, name, description, prompt_template, tool)
@@ -122,7 +124,7 @@ class TestLearningCycleIntegration:
             """,
             (
                 skill_id,
-                "file_analyzer",
+                skill_name,
                 "Skill for analyzing files",
                 "List files and analyze them",
                 "cli"
@@ -136,7 +138,7 @@ class TestLearningCycleIntegration:
             (skill_id,)
         )
         assert len(rows) > 0
-        assert rows[0]["name"] == "file_analyzer"
+        assert rows[0]["name"] == skill_name
 
 
 class TestAntiDriftPreservationSession014:

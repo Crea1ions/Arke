@@ -63,7 +63,7 @@ Only memory accumulation over time.
 | **Unified Endpoint**           | Single interface for CLI, filesystem, memory, APIs, MCP        |
 | **Deterministic Orchestrator** | Execution layer with strict validation gates                   |
 | **SQLite Memory System**       | Global / project / session / cache storage (FTS5 + sqlite-vec) |
-| **Sandbox Isolation**          | Secure execution via bubblewrap                                |
+| **Sandbox Isolation**          | Secure execution via bubblewrap with workspace-aware fallback  |
 | **Skills System**              | Detection of repeated patterns and reusable workflows          |
 | **Multi-Provider LLM Layer**   | Gemini, Claude, Mistral, OpenAI, Ollama                        |
 | **OpenTelemetry Integration**  | Full tracing of execution and cost                             |
@@ -215,6 +215,11 @@ The user must explicitly switch modes to grant tool access.
 Enforcement is double-gated: pre-orchestrator check in `chat.py` and inside `orchestrator._dispatch()`.
 The active mode is displayed in the REPL prompt (`[ask] ›`) and injected into the cognitive contract.
 
+### Workspace root
+
+Arke now uses the caller workspace as the default execution root when `WORKSPACE_ROOT` is not explicitly set.
+The legacy WCU tree (`arke-workspace/WCU`) is treated as an optional artifact for workspace views only: it is not auto-created and is not synced from the launcher directory.
+
 ---
 
 # 🔭 Observability
@@ -255,6 +260,12 @@ It never participates in decision-making.
 * Regressions: 0
 * Suite runtime: ~12.6s
 * Router latency: < 0.002 ms
+
+### CLI safety notes
+
+* `printf` is whitelisted for file creation workflows.
+* `tree` is whitelisted for read-only inspection.
+* `/workspace/...` is treated as the sandbox workspace alias, including in fallback execution paths.
 
 ---
 

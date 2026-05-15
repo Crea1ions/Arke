@@ -22,6 +22,13 @@ Result stored in WCU
 LLM never knows about filesystem
 ```
 
+### Workspace root semantics
+
+- The active execution workspace defaults to the caller directory when `WORKSPACE_ROOT` is not explicitly set.
+- The legacy WCU tree (`arke-workspace/WCU`) is optional and read-only from an orchestration perspective.
+- Arke must not auto-create or auto-sync the caller directory into WCU.
+- If a WCU root is provided explicitly and exists, it may be used for workspace views and legacy artifact storage.
+
 ---
 
 ## 📍 Intent→Path Mapping
@@ -121,6 +128,7 @@ def test_new_intent_path():
 3. ❌ **Never modify existing intent paths**
 4. ❌ **Never let LLM access workspace.py directly**
 5. ❌ **Never put paths in LLM context/prompts**
+6. ❌ **Never auto-create or sync WCU from the launcher cwd**
 
 ### Isolation
 
@@ -170,7 +178,8 @@ Return all available intents.
 
 ### `initialize_workspace(wcu_root: Path) -> WorkspaceManager`
 
-Initialize the workspace manager singleton. **Call only from orchestrator.py on startup.**
+Initialize the workspace manager singleton when an explicit WCU root exists. **Call only from orchestrator.py on startup.**
+This does not create missing directories automatically.
 
 ### `get_workspace() -> Optional[WorkspaceManager]`
 

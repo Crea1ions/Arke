@@ -29,6 +29,7 @@ Config (arke.toml)::
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tomllib
@@ -79,11 +80,23 @@ def _load_allowed_dirs() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _ensure_workspace() -> None:
+def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
+    """Resolve the effective workspace root for command execution."""
+    if workspace_root is None:
+        return AGENT_WORKSPACE
+    root = Path(workspace_root).expanduser()
+    if not root.is_absolute():
+        root = root.resolve()
+    return root
+
+
+def _ensure_workspace(workspace_root: str | Path | None = None) -> Path:
     """Create the agent workspace tree if it does not exist."""
-    AGENT_WORKSPACE.mkdir(parents=True, exist_ok=True)
-    (AGENT_WORKSPACE / "input").mkdir(exist_ok=True)
-    (AGENT_WORKSPACE / "output").mkdir(exist_ok=True)
+    root = _resolve_workspace_root(workspace_root)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "input").mkdir(exist_ok=True)
+    (root / "output").mkdir(exist_ok=True)
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +141,13 @@ _WORKSPACE_SYS_OPTIONAL: list[str] = [
 ]
 
 
-def _build_workspace_argv(command: str, allowed_dirs: list[dict]) -> list[str]:
+def _build_workspace_argv(
+    command: str,
+    allowed_dirs: list[dict],
+    workspace_root: str | Path | None = None,
+) -> list[str]:
     """Build a minimal-privilege bwrap argv for workspace isolation mode."""
-    _ensure_workspace()
+    effective_workspace = _ensure_workspace(workspace_root)
 
     argv: list[str] = [
         "bwrap",
@@ -140,7 +157,7 @@ def _build_workspace_argv(command: str, allowed_dirs: list[dict]) -> list[str]:
         "--proc", "/proc",
         "--dev", "/dev",
         # Workspace: writable agent sandbox mounted at /workspace
-        "--bind", str(AGENT_WORKSPACE), "/workspace",
+        "--bind", str(effective_workspace), "/workspace",
         "--chdir", "/workspace",
     ]
 
@@ -182,6 +199,36 @@ def _build_full_argv(command: str) -> list[str]:
     ]
 
 
+def _run_unsandboxed(
+    command: str,
+    timeout: int,
+    workspace_root: str | Path | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run command without bwrap, constrained to the effective workspace cwd."""
+    effective_workspace = _ensure_workspace(workspace_root)
+    workspace_host = effective_workspace.as_posix().rstrip("/")
+    # In fallback mode, /workspace does not exist on host FS.
+    # Remap sandbox alias to the real host workspace path.
+    remapped = command.replace("/workspace/", f"{workspace_host}/")
+    remapped = re.sub(r"(?<!\S)/workspace(?!\S)", workspace_host, remapped)
+    return subprocess.run(  # noqa: S603
+        remapped,
+        shell=True,  # noqa: S602
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=str(effective_workspace),
+    )
+
+
+def _is_bwrap_runtime_permission_error(stderr: str) -> bool:
+    """Detect bwrap runtime capability failures that should trigger fallback."""
+    text = (stderr or "").lower()
+    if "bwrap:" not in text:
+        return False
+    return "failed rtm_newaddr" in text or "operation not permitted" in text
+
+
 # ---------------------------------------------------------------------------
 # Core runner
 # ---------------------------------------------------------------------------
@@ -192,6 +239,7 @@ def sandboxed_run(
     timeout: int = 30,
     *,
     sandbox_enabled: bool = True,
+    workspace_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Execute *command* optionally inside a bubblewrap sandbox.
 
@@ -230,7 +278,7 @@ def sandboxed_run(
             argv = _build_full_argv(command)
         else:
             allowed_dirs = _load_allowed_dirs()
-            argv = _build_workspace_argv(command, allowed_dirs)
+            argv = _build_workspace_argv(command, allowed_dirs, workspace_root=workspace_root)
 
         result = subprocess.run(  # noqa: S603
             argv,
@@ -238,14 +286,17 @@ def sandboxed_run(
             text=True,
             timeout=timeout,
         )
+
+        if result.returncode != 0 and _is_bwrap_runtime_permission_error(result.stderr):
+            warnings.warn(
+                "bubblewrap runtime permission failure -- falling back to unsandboxed execution "
+                "in workspace cwd.",
+                UserWarning,
+                stacklevel=2,
+            )
+            result = _run_unsandboxed(command, timeout, workspace_root)
     else:
-        result = subprocess.run(  # noqa: S603
-            command,
-            shell=True,  # noqa: S602
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        result = _run_unsandboxed(command, timeout, workspace_root)
 
     return {
         "return_code": result.returncode,

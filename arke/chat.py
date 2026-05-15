@@ -23,6 +23,7 @@ import os
 import re
 import readline  # noqa: F401 — side-effect: enables readline in input()
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -214,10 +215,12 @@ def build_cognitive_context(user_message: str, session_id: str = "") -> str:
     Returns:
         JSON string containing the mode-specific input context
     """
+    workspace_root = os.environ.get("WORKSPACE_ROOT", os.getcwd())
     return build_input_context(
         mode=_get_mode(),
         user_message=user_message,
         session_id=session_id,
+        workspace_root=workspace_root,
     )
 
 
@@ -541,6 +544,167 @@ def _apply_introspection_guard(
     }, True
 
 
+def _is_project_memory_request(intention: str) -> bool:
+    """Detect user questions about the assistant's remembered project."""
+    text = intention.lower()
+    patterns = (
+        "dernier projet",
+        "ton projet",
+        "votre projet",
+        "last project",
+        "your project",
+    )
+    return any(p in text for p in patterns)
+
+
+def _build_project_memory_response(mm: Any) -> str:
+    """Return a deterministic response from session memory for project questions."""
+    try:
+        rows = mm.query(
+            "session",
+            "SELECT value FROM session_context WHERE key = 'projet'",
+            (),
+        )
+    except Exception:
+        rows = []
+
+    project = (rows[0]["value"].strip() if rows and rows[0].get("value") else "")
+    if not project:
+        return (
+            "Je n'ai aucun projet mémorisé dans cette session pour l'instant. "
+            "Si tu veux, je peux en enregistrer un maintenant."
+        )
+
+    return f"Le dernier projet mémorisé dans cette session est : {project}"
+
+
+# ---------------------------------------------------------------------------
+# Mandatory synthesis after tool execution
+# ---------------------------------------------------------------------------
+
+
+def _synthesize_tool_results(
+    intention: str,
+    steps: list,
+    stream_callback=None,
+) -> str:
+    """Call the LLM to synthesize tool results into a natural language response.
+
+    Args:
+        intention: The original user request.
+        steps: Completed task steps with their outputs.
+        stream_callback: Optional callback(token_str) for streaming display.
+
+    Returns:
+        Synthesized response text.
+    """
+    from arke.llm.litellm_manager import LiteLLMManager
+    from arke.task_graph import StepStatus as _SS
+
+    def _build_cli_canonical_summary() -> str:
+        """Return a deterministic CLI summary to ground the final LLM answer."""
+        sections: list[str] = []
+        for step in steps:
+            if getattr(step, "tool", None) != "cli":
+                continue
+
+            command = str(getattr(step, "arguments", {}).get("command", "")).strip()
+            output = getattr(step, "output", None)
+            step_failed = getattr(step, "status", None) != _SS.SUCCESS
+
+            if isinstance(output, dict):
+                stdout = str(output.get("stdout", "")).strip()
+                stderr = str(output.get("stderr", "")).strip()
+            else:
+                stdout = str(output).strip() if output is not None else ""
+                stderr = ""
+
+            status_text = "succès" if not step_failed else "échec"
+            sections.append(f"- Commande: {command or '(commande inconnue)'}")
+            sections.append(f"  Statut canonique: {status_text}")
+
+            if stdout:
+                sections.append(f"  Sortie canonique: {stdout[:500]}")
+            if stderr:
+                sections.append(f"  Erreur canonique: {stderr[:500]}")
+
+        return "\n".join(sections)
+
+    # Collect tool outputs — include failures and empty results explicitly
+    tool_results_text = ""
+    for step in steps:
+        step_failed = getattr(step, "status", None) != _SS.SUCCESS
+        output = step.output
+        if isinstance(output, dict):
+            text = output.get("stdout", "") or output.get("result", "") or ""
+            stderr = output.get("stderr", "").strip()
+            if not text.strip() and stderr:
+                text = f"[erreur] {stderr}"
+        else:
+            text = str(output) if output is not None else ""
+        text = text.strip()
+
+        if step_failed:
+            tool_results_text += f"\n### Étape [{step.tool}] ✗ ÉCHOUÉE\n"
+            if text:
+                tool_results_text += f"{text[:500]}\n"
+        elif text:
+            if len(text) > 3000:
+                text = text[:3000] + "\n… (tronqué)"
+            tool_results_text += f"\n### Résultat [{step.tool}]:\n{text}\n"
+        else:
+            tool_results_text += f"\n### Résultat [{step.tool}]: (aucun résultat)\n"
+
+    if not tool_results_text:
+        return ""
+
+    cli_canonical_summary = _build_cli_canonical_summary()
+
+    prompt_parts = [
+        "Tu es Arke, un agent cognitif autonome.\n\n",
+        "L'utilisateur a demandé :\n",
+        f"> {intention}\n\n",
+    ]
+    if cli_canonical_summary:
+        prompt_parts.append(
+            "RÉSUMÉ CLI CANONIQUE (source de vérité, ne pas contredire) :\n"
+            f"{cli_canonical_summary}\n\n"
+        )
+    prompt_parts.extend([
+        "Voici les résultats bruts des outils exécutés :\n",
+        f"{tool_results_text}\n\n",
+        "RÈGLES ABSOLUES :\n",
+        "1. Si les résultats contiennent '(aucun résultat)', 'no result', des erreurs ou sont vides : "
+        "dis-le honnêtement. N'invente JAMAIS de données fictives.\n",
+        "2. Si des étapes ont échoué (✗) : mentionne-le clairement.\n",
+        "3. Réponds uniquement à partir des données réelles retournées par les outils.\n\n",
+        "4. Si un résumé CLI canonique est présent, il prime sur toute interprétation libre. "
+        "Ne dis jamais qu'une suppression ou création n'a pas eu lieu si le résumé canonique indique succès.\n\n",
+        "Synthétise ces résultats en une réponse claire, concise et structurée en Markdown. "
+        "Ne répète pas les données brutes — résume, analyse et réponds directement à la demande. "
+        "Ne mentionne pas les outils utilisés ni le fait que tu synthétises. "
+        "Réponds directement à la question de l'utilisateur."
+    ])
+    synthesis_prompt = "".join(prompt_parts)
+
+    manager = LiteLLMManager()
+    try:
+        if stream_callback:
+            response_text = ""
+            for token in manager.stream_complete(
+                prompt=synthesis_prompt, task_type="reasoning", max_tokens=1024
+            ):
+                response_text += token
+                stream_callback(token)
+            return response_text
+        else:
+            response_text, _cost, _tokens = manager.complete(
+                prompt=synthesis_prompt, task_type="reasoning", max_tokens=1024
+            )
+            return response_text
+    except Exception as exc:
+        log.warning("synthesis.failed", error=str(exc))
+        return ""
 
 
 
@@ -575,9 +739,9 @@ def _ask_agent(
     """
     from arke.llm.litellm_manager import LiteLLMManager
     
-    # Build mode-dependent tool instruction (Bug 2: suppress pre-tool narration in search/dev)
+    # Build mode-dependent tool instruction (Bug 2: suppress pre-tool narration in search/agent)
     _current_mode = _get_mode()
-    _is_action_mode = _current_mode in ("search", "dev")
+    _is_action_mode = _current_mode in ("search", "agent")
     _tool_instruction = (
         "RÈGLE ABSOLUE : Si tu dois utiliser un outil, ton PREMIER TOKEN doit être `[OUTIL:`. "
         "Aucun texte avant — ni phrase, ni bloc ```markdown, ni introduction, ni plan. "
@@ -642,10 +806,14 @@ def _ask_agent(
         "**Format 2 : Legacy (fallback)**\n"
         "[ARGS: {\"service\": \"SERVICE\", \"action\": \"ACTION\", \"params\": {...}}]\n\n"
         "## Sandbox CLI\n"
-        "IMPORTANT : Chaque commande CLI s'exécute dans un environnement isolé. "
-        "Un fichier créé dans /tmp n'existe que pendant cette commande. "
-        "Pour créer ET lire un fichier, enchaîne tout dans la même commande : "
-        "echo 'contenu' > /tmp/fichier && cat /tmp/fichier\n\n"
+        "IMPORTANT : Chaque commande CLI s'exécute dans un environnement isolé (bubblewrap).\n"
+        "RÈGLES OBLIGATOIRES :\n"
+        "1. Utilise /workspace/ pour tous les fichiers persistants (pas /tmp — chaque commande a un /tmp vide).\n"
+        "2. Pour créer un fichier multi-lignes, utilise printf avec guillemets DOUBLES (jamais simples) :\n"
+        "   printf \"ligne1\\nligne2\\nligne3\\n\" > /workspace/fichier.txt\n"
+        "3. N'utilise JAMAIS de guillemets simples autour d'un contenu qui en contient lui-même.\n"
+        "4. Pour créer ET vérifier dans la même commande :\n"
+        "   printf \"contenu\\n\" > /workspace/fichier.txt && cat /workspace/fichier.txt\n\n"
         "## Bases de données SQLite (IMPORTANT: toujours préciser 'db')\n\n"
         "POUR OPÉRATIONS DE MÉMOIRE: ajoute toujours `\"db\": \"session\"` aux arguments SQLite\n\n"
         "**session.db** (conversationnel — utile pour memory_write/read/forget):\n"
@@ -863,13 +1031,22 @@ def start() -> None:
         except Exception:
             config = {}
         
-        wcu_root = config.get("workspace", {}).get("wcu_root", "arke-workspace/WCU")
-        
+        workspace_cfg = config.get("workspace", {})
+        wcu_root = workspace_cfg.get("wcu_root")
+
+        if not wcu_root:
+            return
+
         # Convert to absolute path if relative
         if not Path(wcu_root).is_absolute():
             wcu_root = Path(__file__).parent.parent / wcu_root
-        
-        WorkspaceCache.initialize(Path(wcu_root))
+
+        wcu_root = Path(wcu_root)
+        if not wcu_root.exists():
+            log.warning(f"workspace_cache_skipped_missing_root: {wcu_root}")
+            return
+
+        WorkspaceCache.initialize(wcu_root)
     except Exception as e:
         log.warning(f"workspace_cache_init_failed: {e}")
         # Non-fatal; WVS commands will handle missing cache gracefully
@@ -895,6 +1072,9 @@ def start() -> None:
         context["cognitive_contract_json"] = cognitive_json
         # Propagate current agent mode to orchestrator for tool gating
         context["agent_mode"] = _get_mode()
+        # Prefer explicit WORKSPACE_ROOT from environment (set by launcher);
+        # fallback to current process directory.
+        context["WORKSPACE_ROOT"] = os.environ.get("WORKSPACE_ROOT", os.getcwd())
 
         force_render_response = False
 
@@ -923,10 +1103,10 @@ def start() -> None:
             on_first_token=_show_agent_header,
         )
 
-        # In action modes (search/dev), suppress streaming text display to avoid
+        # In action modes (search/agent), suppress streaming text display to avoid
         # pre-tool narration. The LLM response still accumulates in _ask_agent for
         # tool tag parsing; only the visible display is suppressed.
-        _is_action_mode_stream = _get_mode() in ("search", "dev")
+        _is_action_mode_stream = _get_mode() in ("search", "agent")
 
         def stream_callback(token: str) -> None:
             """Callback to display streaming tokens."""
@@ -979,6 +1159,10 @@ def start() -> None:
                 agent_decision.get("response", "")
             ).replace("\r\n", "\n").replace("\r", "")
 
+            # Deterministic memory guard: do not hallucinate personal/project facts.
+            if _is_action_mode_stream and _is_project_memory_request(intention):
+                response = _build_project_memory_response(mm)
+
             # If streaming didn't display anything yet (introspection override or
             # very short decision), print the response now inside a fresh thread block.
             if force_render_response or not stream_display.tokens_added():
@@ -1007,7 +1191,7 @@ def start() -> None:
                 if not response:
                     response = (
                         f"[Mode /{_current_mode}] Analyse uniquement. "
-                        f"Utilisez /dev pour exécuter des outils système."
+                        f"Utilisez /agent pour exécuter des outils système."
                     )
                 if not stream_display.tokens_added():
                     if not _header_shown[0]:
@@ -1110,11 +1294,23 @@ def start() -> None:
                             print(T.step_meta("tool", f"{step.tool} (⚠ failed)"))
 
                 cost = task.total_cost or 0.0
+
+                # Mandatory synthesis in action modes (search/agent): call LLM to summarize results
+                if _is_action_mode_stream:
+                    print(T.BORDER + "│" + T.RESET)
+                    synth_display = StreamingMarkdownDisplay(line_prefix=T.BORDER + "│  " + T.RESET)
+                    synthesis = _synthesize_tool_results(
+                        intention,
+                        task.steps,
+                        stream_callback=synth_display.add_token,
+                    )
+                    synth_display.close()
+                    response_text = synthesis or "Exploration complétée."
+                else:
+                    response_text = _strip_internal_markup(stream_display.get_full_text()) or "Exploration complétée."
+
                 print(T.done_line(task.tokens_used, elapsed, cost))
                 print(T.BORDER + "│" + T.RESET)
-                # Fix B: streaming was already displayed live with thread framing.
-                # Capture for history only — do NOT reprint.
-                response_text = _strip_internal_markup(stream_display.get_full_text()) or "Exploration complétée."
             else:
                 # Single-step: show output from the only step
                 last = task.steps[-1]
@@ -1133,10 +1329,23 @@ def start() -> None:
                             f"{T.MUTED}… +{len(step_lines) - _MAX_STEP_LINES} lignes{T.RESET}"
                         ))
                 cost = task.total_cost or 0.0
+
+                # Mandatory synthesis in action modes (search/agent)
+                if _is_action_mode_stream and text:
+                    print(T.BORDER + "│" + T.RESET)
+                    synth_display = StreamingMarkdownDisplay(line_prefix=T.BORDER + "│  " + T.RESET)
+                    synthesis = _synthesize_tool_results(
+                        intention,
+                        task.steps,
+                        stream_callback=synth_display.add_token,
+                    )
+                    synth_display.close()
+                    response_text = synthesis or text or "Tâche terminée."
+                else:
+                    response_text = _strip_internal_markup(stream_display.get_full_text()) or text or "Tâche terminée."
+
                 print(T.done_line(task.tokens_used, elapsed, cost))
                 print(T.BORDER + "│" + T.RESET)
-                # Fix B: streaming already displayed live. Capture for history only.
-                response_text = _strip_internal_markup(stream_display.get_full_text()) or text or "Tâche terminée."
             
             # Check for distillation hint (Session 014.2.3)
             try:
@@ -1159,6 +1368,11 @@ def start() -> None:
             failed_step = next((s for s in task.steps if s.status == StepStatus.FAILED), None)
             tool_name = failed_step.tool if failed_step else "?"
             print(T.error_line(f"Échec à l'étape : {tool_name}"))
+            if failed_step and isinstance(failed_step.output, dict):
+                stderr = str(failed_step.output.get("stderr", "")).strip()
+                if stderr:
+                    for line in stderr.splitlines()[:_MAX_STEP_LINES]:
+                        print(T.step_output(line))
             print(T.BORDER + "│" + T.RESET)
             response_text = f"Échec : {tool_name}"
 
@@ -1355,17 +1569,17 @@ def start() -> None:
                     pass
                 print(f"{T.MUTED}[plan] Mémoire session autorisée, aucune exécution système.{T.RESET}")
 
-            elif cmd == "/dev":
-                _set_mode("dev")
+            elif cmd == "/agent":
+                _set_mode("agent")
                 try:
                     mm.query(
                         "session",
                         "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
-                        ("agent_mode", "dev"),
+                        ("agent_mode", "agent"),
                     )
                 except Exception:
                     pass
-                print(f"{T.WARNING}⚠ [dev] Mode développement actif — outils système disponibles.{T.RESET}")
+                print(f"{T.WARNING}⚠ [agent] Mode exécution actif — outils système disponibles.{T.RESET}")
 
             # Workspace View System (WVS) commands
             elif cmd.startswith("/show_"):

@@ -1,3 +1,7 @@
+# ===========================================================================
+# Arke — Configuration système (Themelios)
+# ===========================================================================
+
 [memory]
 global_path        = "memory/global.db"
 project_path       = "memory/project.db"
@@ -7,7 +11,6 @@ wal_mode           = true
 archive_after_days = 30
 
 [routing]
-# Deterministic hierarchy — immutable until v0.2
 layers = ["cli", "fs", "sqlite", "script", "api", "mcp", "llm"]
 
 [telegram]
@@ -19,210 +22,150 @@ format = "json"
 level  = "info"
 
 [mcp]
-# ContextForge federated MCP endpoint (JSON-RPC 2.0 over HTTP)
-# Set via env var CONTEXTFORGE_URL to override at runtime.
 base_url          = "http://localhost:3000/mcp"
 timeout_sec       = 5
 enabled           = true
 max_cache_entries = 1000
 
 [mcp.cache_ttl]
-# TTL per tool in hours (0 = never expires)
 web_search = 24
-github     = 168     # 1 week
+github     = 168
 rss_reader = 2
 calculator = 0
 
 [cache]
-# LLM response cache TTL in hours (0 = no expiry)
 ttl_hours = 24
 
 [vector]
-# Semantic search via sqlite-vec + Gemini embeddings
-# Set enabled = false on low-memory machines to use FTS5 only
 enabled    = true
 model      = "gemini/text-embedding-004"
 dimensions = 768
 
 [telemetry]
-# OpenTelemetry distributed tracing + optional Prometheus metrics.
-# Set enabled = true to emit spans; set otlp_endpoint to export to Jaeger/Zipkin.
 enabled       = true
-otlp_endpoint = ""       # e.g. "http://localhost:4318/v1/traces"
-prometheus    = false    # requires: pip install opentelemetry-exporter-prometheus
+otlp_endpoint = ""
+prometheus    = false
 
 [sandbox]
-# Wrap shell commands with bubblewrap for filesystem isolation.
-# Falls back to unsandboxed execution (with a warning) when bwrap is absent.
-enabled = true
-# Isolation mode:
-#   "workspace" (recommended) -- agent confined to ~/arke-agent-workspace only
-#   "full"      (legacy)      -- host root mounted read-only
-mode    = "workspace"
-# Maximum workspace size in MB (informational; not enforced by bwrap itself)
-max_size_mb = 500
+enabled      = true
+mode         = "workspace"
+max_size_mb  = 500
 
+# ===========================================================================
+# Agent — Identité minimale (le contrat cognitif porte le reste)
+# ===========================================================================
 [agent]
-# Identité et contexte injecté dans chaque appel LLM conversationnel.
-name    = "Arke"
+name    = "Arché"
 version = "0.3"
-# Le prompt système est complété dynamiquement avec les stats live (skills, mémoire, etc.)
 system_prompt = """
-Tu es Arke, un agent cognitif autonome local-first.
-
-## Ton architecture réelle
-- Routeur déterministe : chaque intention est analysée → cli / fs / sqlite / mcp / llm
-- 4 bases SQLite persistantes : global.db (skills, usage), project.db (documents, FTS5), session.db (historique chat, tâches), cache.db (réponses LLM)
-- Skills auto-appris : tu détectes les patterns répétitifs et crées des skills réutilisables
-- Sandbox bubblewrap : toutes les commandes shell s'exécutent en lecture seule sur /
-- Observabilité : chaque étape est tracée via OpenTelemetry
-
-## Ta mémoire persistante
-- Historique de conversation : session.db → table chat_history (persiste entre sessions)
-- Notes utilisateur : session.db → session_context (clé chat_notes)
-- Skills et usage : global.db → conservés indéfiniment jusqu'au pruning
-
-## Tes capacités concrètes
-- Exécuter des commandes shell dans le sandbox (grep, cat, git, python, curl…)
-- Lire et écrire des fichiers sur le système
-- Requêtes SQLite sur tes 4 bases de mémoire
-- Appels LLM via litellm (Gemini Flash, Claude, Mistral, Ollama local)
-- Intégrations MCP (GitHub, Slack, ContextForge)
-- Recherche sémantique vectorielle (sqlite-vec + embeddings Gemini)
-
-## Workspace Utilisateur (WCU) — Outil pour l'Utilisateur
-- **IMPORTANT** : le workspace est un espace PERSONNEL pour l'utilisateur, pas une extension de ta mémoire
-- Structure: mobile-notes (capture), code (production), projects (structuration), shared (restitution), archive
-- Tu peux **analyser** son contenu si l'utilisateur demande (commandes `/show_*`)
-- Tu ne dois **JAMAIS** tenter d'y sauvegarder ta mémoire, tes états, ou tes apprentissages
-- Ta vraie mémoire reste dans tes 4 bases SQLite (global.db, session.db, project.db, cache.db)
-- Le workspace est l'extension de la mémoire UTILISATEUR uniquement
-
-Réponds en français, de façon concise. Pour les tâches techniques, analyse et exécute directement.
-
-## Ton & style
-- Direct. Dense. Sobre. Pas de préambule.
-- Jamais : "Bien sûr !", "Excellente question !", "Je vais maintenant…", "Voici ce que je vais faire".
-- Jamais de validation émotionnelle artificielle ni de transitions visibles.
-- Réponses courtes par défaut. Plus long seulement si la complexité le justifie.
-- Ne pas sur-expliquer. Ne pas répéter la question. Ne pas annoncer ce qu'on va faire.
-- Emoji : rares, uniquement si utilitaires (✓ ✗ ⚡ — jamais décoratifs).
-
-## Hiérarchie locale-d'abord
-- Cherche d'abord dans : CLI, FS, SQLite, mémoire locale.
-- MCP (GitHub, Slack…) : uniquement si aucune source locale ne peut répondre.
-- Ne jamais appeler un outil externe pour une tâche que le système local peut faire.
+Tu es Archè, l'agent d'Arke. Ton contrat cognitif définit ton identité, ton style, et tes invariants.
+Le JSON de mode actif définit ton comportement spécialisé pour cette conversation.
+arke.toml définit tes limites techniques. Respecte-les sans les questionner.
 """
 
-# ============================================================
-# Serveurs MCP locaux (dernier recours, après CLI/FS/SQLite/scripts)
-# ============================================================
+# ===========================================================================
+# Modes — Définition des modes disponibles et leurs permissions
+# ===========================================================================
+[agent_modes]
+default_mode = "ask"
 
+[agent_modes.ask]
+description = "Analyse, réflexion, discussion — aucun outil"
+tools       = []
+writes      = false
+
+[agent_modes.search]
+description = "Recherche et lecture uniquement — aucune modification"
+tools       = ["sqlite", "memory_fts", "memory_read", "memory_search", "vector_search", "web_search", "rss_reader", "calculator", "mcp"]
+writes      = false
+
+[agent_modes.plan]
+description = "Structuration, planification — mémoire session autorisée"
+tools       = ["sqlite", "memory_fts", "memory_read", "memory_search", "memory_write", "memory_forget", "vector_search"]
+writes      = "memory_only"
+
+[agent_modes.agent]
+description = "Implémentation, exécution — tous les outils disponibles"
+tools       = "unrestricted"
+writes      = true
+warning     = true
+
+# ===========================================================================
+# MCP Servers
+# ===========================================================================
 [mcp_servers]
 
 [mcp_servers.web_search]
 enabled = true
 command = ".venv/bin/python"
-args = ["arke/interfaces/mcp_servers/web_search.py", "--stdio"]
+args    = ["arke/interfaces/mcp_servers/web_search.py", "--stdio"]
 timeout = 30
-description = "Recherche web sans clé API via DuckDuckGo"
 
 [mcp_servers.calculator]
 enabled = true
 command = ".venv/bin/python"
-args = ["arke/interfaces/mcp_servers/calculator.py", "--stdio"]
+args    = ["arke/interfaces/mcp_servers/calculator.py", "--stdio"]
 timeout = 10
-description = "Calculs mathématiques et conversions d'unités"
 
 [mcp_servers.rss_reader]
 enabled = true
 command = ".venv/bin/python"
-args = ["arke/interfaces/mcp_servers/rss_reader.py", "--stdio"]
+args    = ["arke/interfaces/mcp_servers/rss_reader.py", "--stdio"]
 timeout = 20
-description = "Lecture de flux RSS/Atom pour veille informationnelle"
 
 [mcp_servers.github]
 enabled = true
 command = ".venv/bin/python"
-args = ["arke/interfaces/mcp_servers/github.py", "--stdio"]
+args    = ["arke/interfaces/mcp_servers/github.py", "--stdio"]
 timeout = 30
-description = "API GitHub (recherche, dépôts, README)"
 
-# freeweb - Recherche actualités (DuckDuckGo News) + fetch de page
 [mcp_servers.freeweb]
 enabled = true
 command = ".venv/bin/python"
-args = ["arke/interfaces/mcp_servers/freeweb.py", "--stdio"]
+args    = ["arke/interfaces/mcp_servers/freeweb.py", "--stdio"]
 timeout = 30
-description = "Recherche d'actualités DuckDuckGo News + fetch de page web"
 
 # ===========================================================================
-# Cognitive continuity infrastructure (Continuité Cognitive)
+# Cognitive Continuity
 # ===========================================================================
 [social_orchestrator]
-enabled = true
-observation_mode = false         # Phase 1: active delivery enabled
-min_silence_minutes = 30
-active_hours_start = 8
-active_hours_end = 23
-density_base_minutes = 120
-extraction_min_chars = 200
+enabled                    = true
+observation_mode           = false
+min_silence_minutes        = 30
+active_hours_start         = 8
+active_hours_end           = 23
+density_base_minutes       = 120
+extraction_min_chars       = 200
 first_initiative_min_score = 0.6
 normal_initiative_min_score = 0.4
 max_ignored_before_dormant = 3
 
-# ===========================================================================
-# Cognitive Initiative Gate (CIG) — Phase 1 controlled proposition
-# Conservatively gates soft thread reactivation behind density + context checks.
-# ===========================================================================
 [cognitive_initiative_gate]
-enabled = true
-threshold_density = 0.5          # avg_depth_score over 7 days (0.0–1.0)
-reactivation_threshold = 0.65   # min reactivation_score for a dormant thread
-thread_max_age_days = 14         # dormant threads older than this are excluded
-auto_calibrate = true            # adjust threshold_density after enough samples
-calibration_min_samples = 30     # minimum rows WHERE accepted IS NOT NULL required
-semantic_anchor = false          # Phase 2: hybrid keyword+vector anchor (requires [vector] enabled)
-semantic_threshold = 0.65        # cosine similarity threshold when semantic_anchor = true
-divergence_rate = 0.05           # probability of divergent reactivation (Serendipity principle)
-decay_rate = 0.95                # exponential score decay per day of dormancy (Oubli Progressif)
+enabled                 = true
+threshold_density       = 0.5
+reactivation_threshold  = 0.65
+thread_max_age_days     = 14
+auto_calibrate          = true
+calibration_min_samples = 30
+semantic_anchor         = false
+semantic_threshold      = 0.65
+divergence_rate         = 0.05
+decay_rate              = 0.95
 
 [cognitive_initiative_gate.utility_weights]
-# Composite utility score weights for initiative ranking (must sum to 1.0)
-reactivation = 0.4   # w1 — decayed reactivation_score
-importance   = 0.3   # w2 — thread importance_score
-density      = 0.2   # w3 — current interaction density
-relevance    = 0.1   # w4 — semantic relevance (0 when semantic_anchor = false)
+reactivation = 0.4
+importance   = 0.3
+density      = 0.2
+relevance    = 0.1
 
 # ===========================================================================
-# Passive User Workspace (PUW) — Orchestrator-managed storage layer
+# Workspace & Orchestrator
 # ===========================================================================
-# CRITICAL: LLM has ZERO visibility of this. Workspace is opaque to agent.
-# All I/O goes through orchestrator intent→path mapping only.
 [workspace]
-enabled = true
-# WCU root path (default: <project_root>/arke-workspace/WCU)
-# Override via context dict passed to orchestrator.run(intention, context)
+enabled  = true
+# Legacy artifact only: kept for optional WVS/PUW reads, never auto-created.
 wcu_root = "arke-workspace/WCU"
 
-# ===========================================================================
-# Orchestrator — Plan auto-execution safety (Phase 2: GOAP)
-# Auto-exec is NEVER active until the user explicitly opts in.
-# ===========================================================================
 [orchestrator]
-# disabled     : never auto-execute (safe default)
-# after_consent: propose opt-in after auto_exec_suggest_after repetitions
-# always       : reserved for future use (requires after_consent first)
 auto_exec_mode          = "disabled"
-auto_exec_suggest_after = 3         # repetitions before proposing opt-in
-
-# ===========================================================================
-# Agent Modes — control tool access per conversation intent
-# /ask (default) : no tools — analysis and discussion only
-# /search        : read-only local + MCP search tools
-# /plan          : session memory writes only
-# /dev           : unrestricted — all tools available
-# ===========================================================================
-[agent_modes]
-default_mode = "ask"   # safest default — prevents unintended tool execution
-dev_warning  = true    # print warning when entering /dev mode
+auto_exec_suggest_after = 3

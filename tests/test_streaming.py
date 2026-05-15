@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from unittest.mock import Mock, patch, MagicMock
+from types import SimpleNamespace
 
 import pytest
 
 from arke.llm.litellm_manager import LiteLLMManager
-from arke.chat import StreamingMarkdownDisplay, _ask_agent, _strip_internal_markup
+from arke.chat import StreamingMarkdownDisplay, _ask_agent, _strip_internal_markup, _synthesize_tool_results
+from arke.task_graph import StepStatus
 
 
 class MockStreamingChunk:
@@ -257,6 +259,36 @@ def test_ask_agent_without_streaming():
             # Verify response
             assert result["tool"] is None
             assert result["response"] == "Direct response without tools"
+
+
+def test_synthesize_tool_results_includes_canonical_cli_summary():
+    """CLI synthesis prompt must include canonical facts before LLM response."""
+    fake_step = SimpleNamespace(
+        tool="cli",
+        status=StepStatus.SUCCESS,
+        arguments={"command": "rm /workspace/test-001.md && ls /workspace/"},
+        output={"return_code": 0, "stdout": "archive\nMOC_project.md\n", "stderr": ""},
+    )
+
+    captured = {}
+
+    with patch("arke.chat._load_env_file"), patch("arke.llm.litellm_manager.LiteLLMManager") as MockLLMClass:
+        mock_manager = MagicMock()
+        mock_manager.complete.return_value = ("OK", 0.0, 0)
+
+        def _capture(prompt, task_type="reasoning", max_tokens=1024):
+            captured["prompt"] = prompt
+            return ("OK", 0.0, 0)
+
+        mock_manager.complete.side_effect = _capture
+        MockLLMClass.return_value = mock_manager
+
+        result = _synthesize_tool_results("suprime le fichier test-001.md", [fake_step])
+
+    assert result == "OK"
+    assert "RÉSUMÉ CLI CANONIQUE" in captured["prompt"]
+    assert "rm /workspace/test-001.md" in captured["prompt"]
+    assert "Statut canonique: succès" in captured["prompt"]
 
 
 def test_ask_agent_prompt_does_not_teach_confirmation_flow():

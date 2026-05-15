@@ -3,7 +3,7 @@
 # To add a command: document the decision in Arke-DECISION.md first.
 allowed_commands = [
     # Text / search
-    "echo", "cat", "grep", "find", "ls", "head", "tail",
+    "echo", "cat", "grep", "find", "ls", "head", "tail", "tree",
     "wc", "sort", "uniq", "awk", "sed", "cut", "tr", "tee",
     # System info (read-only)
     "uptime", "free", "df", "du", "ps", "uname", "hostname",
@@ -15,7 +15,7 @@ allowed_commands = [
     # Network (read-only)
     "curl", "wget", "jq",
     # File ops
-    "date", "touch", "rm", "mkdir", "cp", "mv"
+    "date", "touch", "rm", "mkdir", "cp", "mv", "printf"
 ]
 
 # Set to true to disable the whitelist (dangerous -- dev only)

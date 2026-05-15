@@ -78,6 +78,10 @@ def default(
     ),
 ) -> None:
     """Launch interactive chat unless a subcommand or --telegram is specified."""
+    import os
+    # Si WORKSPACE_ROOT n'est pas défini, injecte le dossier courant
+    if "WORKSPACE_ROOT" not in os.environ:
+        os.environ["WORKSPACE_ROOT"] = os.getcwd()
     if ctx.invoked_subcommand is None:
         if telegram:
             _start_telegram(daemon=daemon)
@@ -89,6 +93,9 @@ def default(
 @app.command("chat")
 def chat_cmd() -> None:
     """Mode chat interactif (alias explicite)."""
+    import os
+    if "WORKSPACE_ROOT" not in os.environ:
+        os.environ["WORKSPACE_ROOT"] = os.getcwd()
     from arke.chat import start
     start()
 
@@ -104,6 +111,8 @@ def run(
     ),
 ) -> None:
     """Execute an intention through the Arke kernel."""
+
+    import os
     ctx: dict = {}
     if context_json:
         try:
@@ -111,6 +120,10 @@ def run(
         except json.JSONDecodeError as exc:
             typer.echo(f"Error: invalid --context JSON — {exc}", err=True)
             raise typer.Exit(1)
+    # Si WORKSPACE_ROOT n'est pas défini, injecte le dossier courant
+    if "WORKSPACE_ROOT" not in os.environ:
+        os.environ["WORKSPACE_ROOT"] = os.getcwd()
+    ctx["WORKSPACE_ROOT"] = os.environ["WORKSPACE_ROOT"]
 
     task = orchestrator.run(intention, ctx)
 

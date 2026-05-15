@@ -40,9 +40,9 @@ class TestGetSetMode:
     def test_default_mode_is_ask(self):
         assert mm.get_mode() == "ask"
 
-    def test_set_mode_dev(self):
-        mm.set_mode("dev")
-        assert mm.get_mode() == "dev"
+    def test_set_mode_agent(self):
+        mm.set_mode("agent")
+        assert mm.get_mode() == "agent"
 
     def test_set_mode_search(self):
         mm.set_mode("search")
@@ -61,8 +61,8 @@ class TestGetSetMode:
             mm.set_mode("")
 
     def test_mode_change_is_persistent(self):
-        mm.set_mode("dev")
-        assert mm.get_mode() == "dev"
+        mm.set_mode("agent")
+        assert mm.get_mode() == "agent"
         mm.set_mode("plan")
         assert mm.get_mode() == "plan"
 
@@ -74,7 +74,7 @@ class TestGetSetMode:
 
 class TestIsValidMode:
     def test_valid_modes(self):
-        for mode in ("ask", "search", "plan", "dev"):
+        for mode in ("ask", "search", "plan", "agent"):
             assert mm.is_valid_mode(mode)
 
     def test_invalid_mode(self):
@@ -92,8 +92,8 @@ class TestModePermissionsMatrix:
     def test_ask_has_empty_frozenset(self):
         assert mm.MODE_PERMISSIONS["ask"] == frozenset()
 
-    def test_dev_is_none_unrestricted(self):
-        assert mm.MODE_PERMISSIONS["dev"] is None
+    def test_agent_is_none_unrestricted(self):
+        assert mm.MODE_PERMISSIONS["agent"] is None
 
     def test_search_contains_read_tools(self):
         expected = {"sqlite", "memory_fts", "memory_read", "vector_search", "web_search"}
@@ -108,7 +108,7 @@ class TestModePermissionsMatrix:
         assert "fs" not in mm.MODE_PERMISSIONS["plan"]
 
     def test_all_four_modes_present(self):
-        for mode in ("ask", "search", "plan", "dev"):
+        for mode in ("ask", "search", "plan", "agent"):
             assert mode in mm.MODE_PERMISSIONS
 
 
@@ -140,12 +140,12 @@ class TestCanExecuteTool:
     def test_plan_blocks_cli(self):
         assert not mm.can_execute_tool("cli", "plan")
 
-    def test_dev_allows_cli(self):
-        assert mm.can_execute_tool("cli", "dev")
+    def test_agent_allows_cli(self):
+        assert mm.can_execute_tool("cli", "agent")
 
-    def test_dev_allows_everything(self):
+    def test_agent_allows_everything(self):
         for tool in ("cli", "fs", "sqlite", "mcp", "memory_write", "any_future_tool"):
-            assert mm.can_execute_tool(tool, "dev")
+            assert mm.can_execute_tool(tool, "agent")
 
     def test_unknown_mode_blocks_all(self):
         assert not mm.can_execute_tool("cli", "unknown_mode")
@@ -172,27 +172,28 @@ class TestLoadModeSchema:
         assert isinstance(schema, dict)
         assert schema.get("mode") == "plan"
 
-    def test_dev_schema_loads(self):
-        schema = mm.load_mode_schema("dev")
+    def test_agent_schema_loads(self):
+        schema = mm.load_mode_schema("agent")
         assert isinstance(schema, dict)
-        assert schema.get("mode") == "dev"
+        assert schema.get("mode") == "agent"
 
-    def test_ask_schema_has_no_tools(self):
+    def test_ask_schema_has_alignment_rules(self):
         schema = mm.load_mode_schema("ask")
-        assert schema.get("contract", {}).get("rules", {}).get("no_tools") is True
+        assert "alignment" in schema
+        assert isinstance(schema.get("alignment", {}).get("rules", []), list)
 
-    def test_search_schema_has_allowed_tools(self):
+    def test_search_schema_has_alignment_output(self):
         schema = mm.load_mode_schema("search")
-        assert "allowed_tools" in schema
-        assert "sqlite" in schema["allowed_tools"]
+        assert "alignment" in schema
+        assert "output" in schema.get("alignment", {})
 
-    def test_plan_schema_has_memory_write(self):
+    def test_plan_schema_has_handoffs(self):
         schema = mm.load_mode_schema("plan")
-        assert "memory_write" in schema.get("allowed_tools", [])
+        assert isinstance(schema.get("handoffs", []), list)
 
-    def test_dev_schema_unrestricted(self):
-        schema = mm.load_mode_schema("dev")
-        assert schema.get("allowed_tools") == "unrestricted"
+    def test_agent_schema_has_workflow(self):
+        schema = mm.load_mode_schema("agent")
+        assert "workflow" in schema.get("alignment", {})
 
     def test_unknown_mode_returns_empty_dict(self):
         schema = mm.load_mode_schema("nonexistent_mode")
@@ -211,7 +212,7 @@ class TestBuildInputContext:
         assert isinstance(ctx, dict)
 
     def test_runtime_mode_field(self):
-        for mode in ("ask", "search", "plan", "dev"):
+        for mode in ("ask", "search", "plan", "agent"):
             result = mm.build_input_context(mode, "test")
             ctx = json.loads(result)
             assert ctx["runtime"]["mode"] == mode
@@ -232,20 +233,19 @@ class TestBuildInputContext:
         assert ctx["runtime"]["session_id"] == "fixed-id"
 
     def test_schema_merged_into_context(self):
-        """Schema fields (mode, contract, scope) must appear in the output."""
+        """Schema fields (mode, alignment) must appear in the output."""
         result = mm.build_input_context("ask", "test")
         ctx = json.loads(result)
-        # Schema for 'ask' includes 'contract' key
-        assert "contract" in ctx
+        assert "alignment" in ctx
 
     def test_history_length_zero_when_empty(self):
-        result = mm.build_input_context("dev", "test", history=None)
+        result = mm.build_input_context("agent", "test", history=None)
         ctx = json.loads(result)
         assert ctx["input"]["history_length"] == 0
 
     def test_history_length_reflects_history(self):
         history = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
-        result = mm.build_input_context("dev", "test", history=history)
+        result = mm.build_input_context("agent", "test", history=history)
         ctx = json.loads(result)
         assert ctx["input"]["history_length"] == 2
 
@@ -253,3 +253,12 @@ class TestBuildInputContext:
         r1 = json.loads(mm.build_input_context("ask", "test"))
         r2 = json.loads(mm.build_input_context("ask", "test"))
         assert r1["runtime"]["turn_id"] != r2["runtime"]["turn_id"]
+
+    def test_workspace_root_is_injected_when_provided(self):
+        result = mm.build_input_context(
+            "ask",
+            "hello",
+            workspace_root="/tmp/arke-ws",
+        )
+        ctx = json.loads(result)
+        assert ctx["runtime"]["WORKSPACE_ROOT"] == "/tmp/arke-ws"

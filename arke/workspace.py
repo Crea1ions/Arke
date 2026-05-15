@@ -216,10 +216,9 @@ def initialize_workspace(wcu_root: Path) -> WorkspaceManager:
     global _workspace_manager
     _workspace_manager = WorkspaceManager(wcu_root)
     
-    # Validate structure on init
+    # Validate structure on init, but never auto-create: WCU is optional legacy artifact.
     if not _workspace_manager.validate_structure():
-        print("⚠️  Warning: WCU structure incomplete, will attempt auto-creation")
-        _auto_create_structure(wcu_root)
+        print("⚠️  Warning: WCU structure incomplete; auto-creation disabled")
     
     return _workspace_manager
 
