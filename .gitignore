@@ -87,3 +87,5 @@ Thumbs.db
 Arke-05-sessions/
 debug-*.py
 verify-*.py
+
+.arke/
