@@ -9,9 +9,22 @@ All filesystem operations to WCU go through the orchestrator via intent mapping.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+
+def atomic_write(file_path: Path, content: str) -> None:
+    """Write content to a file atomically."""
+    temp_file = file_path.with_suffix(file_path.suffix + '.tmp')
+    try:
+        temp_file.write_text(content, encoding='utf-8')
+        os.replace(temp_file, file_path)
+    except Exception as e:
+        if temp_file.exists():
+            temp_file.unlink()
+        raise e
 
 
 class WorkspaceManager:
@@ -135,7 +148,7 @@ class WorkspaceManager:
             filename = f"{timestamp}_{intent}.md"
         
         file_path = target_path / filename
-        
+
         try:
             # Prepend metadata as YAML frontmatter if provided
             output = content
@@ -146,7 +159,7 @@ class WorkspaceManager:
                 yaml_header += "---\n\n"
                 output = yaml_header + content
             
-            file_path.write_text(output, encoding="utf-8")
+            atomic_write(file_path, output)
             print(f"✅ Wrote artifact: {file_path.relative_to(self.wcu_root)}")
             return file_path
         except Exception as e:

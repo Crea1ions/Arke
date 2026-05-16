@@ -9,6 +9,7 @@ LLM never sees workspace structure or paths.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from arke import router
 from arke import gates
 from arke.task_graph import Step, StepStatus, Task
 from arke import workspace  # PUW integration (orchestrator-only)
+from arke.logging.action_writer import log_action
 
 log = structlog.get_logger()
 
@@ -114,7 +116,7 @@ def _initialize_workspace_once(ctx: dict[str, Any]) -> None:
     global _workspace_initialized
     if _workspace_initialized:
         return
-    
+
     try:
         # Legacy WCU is opt-in: only initialize when an explicit root exists.
         wcu_root = ctx.get("wcu_root") or ctx.get("workspace_wcu_root")
@@ -154,6 +156,7 @@ def _execute_step(
 ) -> None:
     """Execute *step* with retry logic, then validate via its gate."""
     step.status = StepStatus.RUNNING
+    step_start = time.perf_counter()
 
     while True:
         try:
@@ -172,6 +175,7 @@ def _execute_step(
             if step.retry_count > step.max_retries:
                 step.status = StepStatus.FAILED
                 _record_step_outcome(step, task, success=False)
+                _log_step_action(step, ctx, task, step_start, success=False)
                 return
             continue
 
@@ -188,13 +192,43 @@ def _execute_step(
         if valid:
             step.status = StepStatus.SUCCESS
             _record_step_outcome(step, task, success=True)
+            _log_step_action(step, ctx, task, step_start, success=True)
             return
 
         step.retry_count += 1
         if step.retry_count > step.max_retries:
             step.status = StepStatus.FAILED
             _record_step_outcome(step, task, success=False)
+            _log_step_action(step, ctx, task, step_start, success=False)
             return
+
+
+def _log_step_action(step: Step, ctx: dict[str, Any], task: Task, start_time: float, success: bool) -> None:
+    """Log step execution to action audit trail."""
+    try:
+        workspace_root = Path(ctx.get("WORKSPACE_ROOT", "."))
+        logs_dir = workspace_root / ".arke" / "logs"
+        
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        
+        log_action(
+            logs_dir=logs_dir,
+            session_id=ctx.get("session_id", "unknown"),
+            mode=ctx.get("agent_mode", "ask"),
+            tool=step.tool,
+            action="execute",
+            command=str(step.arguments.get("command", "")) if step.tool == "cli" else None,
+            rc=0 if success else 1,
+            duration_ms=duration_ms,
+            step=step.id,
+            details={
+                "status": step.status.name,
+                "retry_count": step.retry_count,
+                "task_id": task.id,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass  # Fail silently
 
 
 def _traced_dispatch(step: Step, ctx: dict[str, Any], task: Task) -> Any:

@@ -20,6 +20,7 @@ import structlog
 import typer
 
 from arke import orchestrator
+from arke.init_workspace import ensure_arke_workspace
 from arke.task_graph import StepStatus
 from arke.telemetry import init_tracer
 
@@ -79,10 +80,17 @@ def default(
 ) -> None:
     """Launch interactive chat unless a subcommand or --telegram is specified."""
     import os
-    # Si WORKSPACE_ROOT n'est pas défini, injecte le dossier courant
     if "WORKSPACE_ROOT" not in os.environ:
         os.environ["WORKSPACE_ROOT"] = os.getcwd()
+
     if ctx.invoked_subcommand is None:
+        init_result = ensure_arke_workspace()
+        for warning in init_result.warnings:
+            typer.echo(f"Warning: workspace init issue ({warning})", err=True)
+
+        if init_result.created:
+            typer.echo(f"Initialized local workspace at {init_result.arke_root}")
+
         if telegram:
             _start_telegram(daemon=daemon)
         else:
@@ -96,6 +104,14 @@ def chat_cmd() -> None:
     import os
     if "WORKSPACE_ROOT" not in os.environ:
         os.environ["WORKSPACE_ROOT"] = os.getcwd()
+
+    init_result = ensure_arke_workspace()
+    for warning in init_result.warnings:
+        typer.echo(f"Warning: workspace init issue ({warning})", err=True)
+
+    if init_result.created:
+        typer.echo(f"Initialized local workspace at {init_result.arke_root}")
+
     from arke.chat import start
     start()
 
@@ -123,6 +139,14 @@ def run(
     # Si WORKSPACE_ROOT n'est pas défini, injecte le dossier courant
     if "WORKSPACE_ROOT" not in os.environ:
         os.environ["WORKSPACE_ROOT"] = os.getcwd()
+
+    init_result = ensure_arke_workspace()
+    for warning in init_result.warnings:
+        typer.echo(f"Warning: workspace init issue ({warning})", err=True)
+
+    if init_result.created:
+        typer.echo(f"Initialized local workspace at {init_result.arke_root}")
+
     ctx["WORKSPACE_ROOT"] = os.environ["WORKSPACE_ROOT"]
 
     task = orchestrator.run(intention, ctx)

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 import pytest
 
+import arke.memory.manager as mod
 from arke.memory.manager import MemoryManager
 
 
@@ -145,3 +147,50 @@ class TestFTS5Sync:
         
         assert len(rows) == 1
         assert "unique_marker_12345" in rows[0]["content"]
+
+
+def test_load_db_paths_prefers_workspace_config(tmp_path, monkeypatch):
+    workspace_root = tmp_path / "workspace"
+    workspace_cfg_dir = workspace_root / ".arke" / "config"
+    workspace_cfg_dir.mkdir(parents=True, exist_ok=True)
+    workspace_cfg = workspace_cfg_dir / "workspace.toml"
+
+    workspace_cfg.write_text(
+        "[memory]\n"
+        "global_path = \".arke/memory/global.db\"\n"
+        "project_path = \".arke/memory/project.db\"\n"
+        "session_path = \".arke/sessions/session_custom.db\"\n"
+        "cache_path = \".arke/memory/cache.db\"\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+
+    paths = mod._load_db_paths()
+
+    assert paths["global"] == workspace_root / ".arke" / "memory" / "global.db"
+    assert paths["project"] == workspace_root / ".arke" / "memory" / "project.db"
+    assert paths["session"] == workspace_root / ".arke" / "sessions" / "session_custom.db"
+    assert paths["cache"] == workspace_root / ".arke" / "memory" / "cache.db"
+
+
+def test_load_db_paths_workspace_default_session_is_dated(tmp_path, monkeypatch):
+    workspace_root = tmp_path / "workspace"
+    workspace_cfg_dir = workspace_root / ".arke" / "config"
+    workspace_cfg_dir.mkdir(parents=True, exist_ok=True)
+    workspace_cfg = workspace_cfg_dir / "workspace.toml"
+
+    workspace_cfg.write_text(
+        "[memory]\n"
+        "global_path = \".arke/memory/global.db\"\n"
+        "project_path = \".arke/memory/project.db\"\n"
+        "cache_path = \".arke/memory/cache.db\"\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+
+    paths = mod._load_db_paths()
+
+    expected_name = f"session_{datetime.now().strftime('%Y%m%d')}.db"
+    assert paths["session"] == workspace_root / ".arke" / "sessions" / expected_name

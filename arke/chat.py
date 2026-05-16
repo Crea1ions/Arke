@@ -48,6 +48,7 @@ from arke.anti_drift_metrics import get_metrics_instance
 from arke.tool_registry import TOOL_REGISTRY
 from arke.thread_extractor import extract_async
 from arke.social_orchestrator import SocialOrchestrator
+from arke.session.state_manager import SessionStateManager
 from arke.cognitive_initiative_gate import cognitive_initiative_engine, mark_initiative_accepted, detect_positive_signal
 from arke.mode_manager import (
     get_mode as _get_mode,
@@ -467,6 +468,7 @@ def _extract_plan_from_response(response_text: str) -> str | None:
     Returns:
         The plan text if found, otherwise None
     """
+    response_text = response_text or ""
     plan_match = re.search(r'\[PLAN:(.*?)/PLAN\]', response_text, re.DOTALL)
     if plan_match:
         return plan_match.group(1).strip()
@@ -475,6 +477,7 @@ def _extract_plan_from_response(response_text: str) -> str | None:
 
 def _strip_internal_markup(text: str) -> str:
     """Remove internal control markup from user-visible assistant text."""
+    text = text or ""
     cleaned = re.sub(r'\[PLAN:.*?/PLAN\]', '', text, flags=re.DOTALL)
     cleaned = re.sub(r'\[OUTIL:.*?\]', '', cleaned)
     cleaned = re.sub(r'\[ARGS:.*?\]', '', cleaned, flags=re.DOTALL)
@@ -541,6 +544,51 @@ def _apply_introspection_guard(
     return {
         "tool": None,
         "response": _build_context_introspection_response(cognitive_json, context),
+    }, True
+
+
+def _is_workspace_listing_request(intention: str) -> bool:
+    """Detect explicit requests to list/show the current workspace contents."""
+    text = intention.lower()
+    patterns = (
+        "montre moi ton workspace",
+        "montre-moi ton workspace",
+        "montre le workspace",
+        "structure du workspace",
+        "liste les fichiers",
+        "show workspace",
+        "list workspace",
+        "show repository tree",
+    )
+    return any(p in text for p in patterns)
+
+
+def _build_workspace_listing_guard_response() -> str:
+    """Deterministic response to avoid fabricated workspace listings in ask mode."""
+    return (
+        "Je suis en mode /ask (lecture seule sans exécution d'outils), donc je ne peux pas "
+        "inspecter le workspace réel depuis ici.\n\n"
+        "Pour obtenir la vraie arborescence :\n"
+        "- passe en /search pour explorer en lecture\n"
+        "- ou en /agent si tu veux une commande comme `tree -a`\n\n"
+        "Je n'afficherai pas de structure simulée."
+    )
+
+
+def _apply_workspace_listing_guard(
+    intention: str,
+    agent_decision: dict[str, Any],
+    current_mode: str,
+) -> tuple[dict[str, Any], bool]:
+    """Prevent fabricated workspace listings when in ask mode."""
+    if current_mode != "ask":
+        return agent_decision, False
+    if not _is_workspace_listing_request(intention):
+        return agent_decision, False
+
+    return {
+        "tool": None,
+        "response": _build_workspace_listing_guard_response(),
     }, True
 
 
@@ -912,7 +960,7 @@ Ne combine pas les commandes CLI avec && ou |. Chaque étape = un outil indépen
     
     # Parse response for multiple [OUTIL:] and [ARGS:] pairs
     # Supports multi-step sequences: [OUTIL: tool1] [ARGS: {...}] then [OUTIL: tool2] [ARGS: {...}] etc.
-    response_text = response_text.strip()
+    response_text = (response_text or "").strip()
     
     # Extract all [OUTIL: ...] tags
     outil_pattern = r'\[OUTIL:\s*(\w+)\]'
@@ -1000,6 +1048,10 @@ def start() -> None:
 
     mm = MemoryManager()
 
+    # Session state management (Phase 4)
+    arke_root = Path(os.environ.get("WORKSPACE_ROOT", ".")) / ".arke"
+    state_mgr = SessionStateManager(arke_root)
+
     # Detect sandbox for banner footer
     sandbox_ok = bool(shutil.which("bwrap"))
     print(T.banner(sandbox=sandbox_ok))
@@ -1009,8 +1061,7 @@ def start() -> None:
     _task_running = [False]
 
     # --- Cognitive continuity infrastructure ---
-    import uuid as _uuid
-    _session_id = str(_uuid.uuid4())
+    _session_id = state_mgr.session_id
     _social_orchestrator = SocialOrchestrator(mm, _session_id)
     _social_orchestrator.start()
     _cancel_extraction = [None]  # type: list[threading.Event | None]
@@ -1020,7 +1071,6 @@ def start() -> None:
     # Initialize workspace cache (WVS)
     try:
         import tomllib
-        from pathlib import Path
         from arke.wvs.cache import WorkspaceCache
         
         # Load config to get workspace root
@@ -1075,6 +1125,8 @@ def start() -> None:
         # Prefer explicit WORKSPACE_ROOT from environment (set by launcher);
         # fallback to current process directory.
         context["WORKSPACE_ROOT"] = os.environ.get("WORKSPACE_ROOT", os.getcwd())
+        # Pass session ID for action logging (Phase 4)
+        context["session_id"] = _session_id
 
         force_render_response = False
 
@@ -1106,7 +1158,12 @@ def start() -> None:
         # In action modes (search/agent), suppress streaming text display to avoid
         # pre-tool narration. The LLM response still accumulates in _ask_agent for
         # tool tag parsing; only the visible display is suppressed.
-        _is_action_mode_stream = _get_mode() in ("search", "agent")
+        # Also suppress in ask mode for explicit workspace-listing requests so we
+        # can enforce a deterministic non-fabricated response.
+        _is_action_mode_stream = (
+            _get_mode() in ("search", "agent")
+            or (_get_mode() == "ask" and _is_workspace_listing_request(intention))
+        )
 
         def stream_callback(token: str) -> None:
             """Callback to display streaming tokens."""
@@ -1144,6 +1201,13 @@ def start() -> None:
             cognitive_json,
             context,
         )
+
+        agent_decision, workspace_guard_applied = _apply_workspace_listing_guard(
+            intention,
+            agent_decision,
+            _get_mode(),
+        )
+        force_render_response = force_render_response or workspace_guard_applied
         
         # Finalize streaming display — closes the open line if needed.
         stream_display.close()
@@ -1250,6 +1314,10 @@ def start() -> None:
             orch._execute_step = _orig_execute
 
         elapsed = time.perf_counter() - t0
+
+        # Phase 4: persist tools/mode observed in this execution.
+        for executed_step in task.steps:
+            state_mgr.record_tool_usage(executed_step.tool, _get_mode())
 
         # Output
         if task.status == StepStatus.SUCCESS:
@@ -1451,7 +1519,7 @@ def start() -> None:
         if result.kind == RouteKind.SLASH:
             cmd = result.slash
 
-            if cmd == "/exit":
+            if cmd in ("/exit", "/quit"):
                 print(f"{T.MUTED}Au revoir.{T.RESET}")
                 break
 
@@ -1611,6 +1679,8 @@ def start() -> None:
         # --- Agent execution (unified via orchestrator) ----------------------
         # All non-slash, non-@model messages route here (agent-first principle)
         if result.kind == RouteKind.LLM_AGENT:
+            # Phase 4: count user turns that actually trigger an agent response.
+            state_mgr.record_message()
             # Track agent decision in anti-drift metrics
             get_metrics_instance().increment_agent_decision()
             _task_running[0] = True
@@ -1626,6 +1696,7 @@ def start() -> None:
                 _task_running[0] = False
 
     # Clean shutdown
+    state_mgr.close_session()
     _social_orchestrator.stop()
 
 

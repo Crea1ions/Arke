@@ -13,8 +13,10 @@ first access.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,33 @@ _DB_TABLE_PREFIXES: dict[str, list[str]] = {
 
 
 def _load_db_paths() -> dict[str, Path]:
+    workspace_root = os.environ.get("WORKSPACE_ROOT")
+    if workspace_root:
+        root = Path(workspace_root).expanduser().resolve()
+        workspace_cfg = root / ".arke" / "config" / "workspace.toml"
+        if workspace_cfg.exists():
+            try:
+                with open(workspace_cfg, "rb") as fh:
+                    data = tomllib.load(fh)
+                mem = data.get("memory", {})
+
+                default_session_name = f"session_{datetime.now().strftime('%Y%m%d')}.db"
+
+                def _resolve(path_value: str) -> Path:
+                    path = Path(path_value)
+                    if path.is_absolute():
+                        return path
+                    return root / path
+
+                return {
+                    "global": _resolve(mem.get("global_path", ".arke/memory/global.db")),
+                    "project": _resolve(mem.get("project_path", ".arke/memory/project.db")),
+                    "session": _resolve(mem.get("session_path", f".arke/sessions/{default_session_name}")),
+                    "cache": _resolve(mem.get("cache_path", ".arke/memory/cache.db")),
+                }
+            except Exception:  # noqa: BLE001
+                pass
+
     config_path = _BASE_DIR / "config" / "arke.toml"
     try:
         with open(config_path, "rb") as fh:

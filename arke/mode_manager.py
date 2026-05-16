@@ -61,11 +61,11 @@ def is_valid_mode(mode: str) -> bool:
 MODE_PERMISSIONS: dict[str, frozenset[str] | None] = {
     "ask":    frozenset(),  # aucun outil
     "search": frozenset({
-        "sqlite", "memory_fts", "memory_read", "memory_search",
+        "fs", "sqlite", "memory_fts", "memory_read", "memory_search",
         "vector_search", "web_search", "rss_reader", "calculator", "mcp",
     }),
     "plan":   frozenset({
-        "sqlite", "memory_fts", "memory_read", "memory_search",
+        "fs", "sqlite", "memory_fts", "memory_read", "memory_search",
         "memory_write", "memory_forget", "vector_search",
     }),
     "agent":  None,  # accès complet
