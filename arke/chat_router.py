@@ -47,6 +47,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/model":  "Sélecteur de modèle LLM interactif",
     "/memory": "Affiche les notes mémorisées de la session",
     "/about":  "À propos d'Arke (architecture, philosophie)",
+    "/workspace": "Gère les workspaces (.arke): list, select, sync",
     "/clear":  "Efface l'historique de session",
     "/exit":   "Quitter Arke Chat",
     "/threads":            "Liste les fils cognitifs actifs",
@@ -58,13 +59,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/search": "Mode recherche — lecture seule (SQLite, FTS, MCP)",
     "/plan":   "Mode planification — mémoire session uniquement",
     "/agent":  "Mode exécution — tous les outils disponibles",
-    # Workspace View System (WVS) commands — filtered from /help, only shown in /show_workspace
-    "/show_workspace":     "Visualize entire workspace structure",
-    "/show_mobile_notes":  "Details of mobile-notes (capture layer)",
-    "/show_code":          "Details of code artifacts",
-    "/show_projects":      "Details of projects/TEMP (structuration layer)",
-    "/show_shared":        "Details of shared restitution outputs",
-    "/show_archive":       "Archive contents",
+    "/show_workspace": "Affiche la structure réelle du workspace courant",
 }
 
 # ---------------------------------------------------------------------------

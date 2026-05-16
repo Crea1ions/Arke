@@ -52,6 +52,7 @@ class SessionStateManager:
             "resumed_from": None,
             "closed_at": None,
             "migrated_from": [],
+            "last_synced_workspace": None,
         }
     
     def _load_or_init(self) -> Dict[str, Any]:

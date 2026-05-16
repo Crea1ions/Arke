@@ -102,10 +102,10 @@ def model_icon(alias: str) -> str:
 
 
 def model_label(alias: str) -> str:
-    """Return colored ``alias icon`` string, e.g. ``flash ⚡``."""
+    """Return colored ``Model icon`` string, e.g. ``Flash ⚡``."""
     col = model_color(alias)
     icon = model_icon(alias)
-    return f"{col}{BOLD}{alias} {icon}{RESET}"
+    return f"{col}{BOLD}{alias.capitalize()} {icon}{RESET}"
 
 
 def fmt_time() -> str:
@@ -188,26 +188,26 @@ def user_block(text: str, width: int = _DEFAULT_WIDTH) -> str:
         │  text
     """
     ts = fmt_time()
-    header = f"{BORDER}├─{RESET} {USER_C}user{RESET} {MUTED}· {ts}{RESET}"
+    header = f"{BORDER}├─{RESET} {USER_C}Toi 👤{RESET} {MUTED}· {ts}{RESET}"
     content = f"{BORDER}│{RESET}  {TEXT}{text}{RESET}"
     return f"{BORDER}│{RESET}\n{header}\n{content}"
 
 
 def agent_header(alias: str, width: int = _DEFAULT_WIDTH) -> str:
-    """Render ``├─ arke · flash ⚡ · HH:MM`` header line."""
+    """Render ``├─ Arke · Flash ⚡ · HH:MM`` header line."""
     ts = fmt_time()
     mlabel = model_label(alias)
     return (f"{BORDER}│{RESET}\n"
-            f"{BORDER}├─{RESET} {ACCENT}{BOLD}arke{RESET} "
+            f"{BORDER}├─{RESET} {ACCENT}{BOLD}Arke{RESET} "
             f"{MUTED}·{RESET} {mlabel} "
             f"{MUTED}· {ts}{RESET}")
 
 
 def agent_footer(alias: str) -> str:
-    """Return ``└─ arke · flash ⚡ · HH:MM`` closing line."""
+    """Return ``└─ Arke · Flash ⚡ · HH:MM`` closing line."""
     ts = fmt_time()
     mlabel = model_label(alias)
-    return (f"{BORDER}└─{RESET} {ACCENT}{BOLD}arke{RESET} "
+    return (f"{BORDER}└─{RESET} {ACCENT}{BOLD}Arke{RESET} "
             f"{MUTED}·{RESET} {mlabel} "
             f"{MUTED}· {ts}{RESET}")
 
@@ -274,10 +274,10 @@ def llm_output_line(line: str) -> str:
 
 
 def prompt_line(alias: str) -> str:
-    """Return the prompt string: ``flash ⚡ · HH:MM\\n› ``"""
+    """Return the prompt string: ``Arke (Flash ⚡) · HH:MM\n› ``"""
     ts = fmt_time()
     mlabel = model_label(alias)
-    return f"\n{mlabel} {MUTED}· {ts}{RESET}\n{ACCENT}›{RESET} "
+    return f"\n{ACCENT}{BOLD}Arke{RESET} {MUTED}({RESET}{mlabel}{MUTED}) · {ts}{RESET}\n{ACCENT}›{RESET} "
 
 
 # ---------------------------------------------------------------------------

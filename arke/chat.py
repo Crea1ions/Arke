@@ -44,6 +44,11 @@ from arke.chat_router import (
     memory_write,
     route,
 )
+from arke.init_workspace import (
+    ensure_arke_workspace,
+    resolve_workspace_root,
+    update_last_synced_workspace,
+)
 from arke.anti_drift_metrics import get_metrics_instance
 from arke.tool_registry import TOOL_REGISTRY
 from arke.thread_extractor import extract_async
@@ -169,6 +174,174 @@ def _prompt_with_mode() -> str:
     # T.prompt_line returns: "\n{mlabel} · {ts}\n{ACCENT}›{RESET} "
     badge = f"{T.MUTED}[{mode}]{T.RESET} "
     return base.replace(f"\n{T.ACCENT}›{T.RESET} ", f"\n{badge}{T.ACCENT}›{T.RESET} ")
+
+
+def _discover_workspaces(current_root: Path) -> list[Path]:
+    """Discover sibling workspaces containing a `.arke` directory."""
+    resolved_current = current_root.resolve()
+    scan_roots = [resolved_current, resolved_current.parent]
+    candidates: set[Path] = set()
+
+    for base in scan_roots:
+        if not base.exists() or not base.is_dir():
+            continue
+        to_scan = [base]
+        try:
+            to_scan.extend([entry for entry in base.iterdir() if entry.is_dir()])
+        except OSError:
+            continue
+        for path in to_scan:
+            try:
+                if (path / ".arke").is_dir():
+                    candidates.add(path.resolve())
+            except OSError:
+                continue
+
+    return sorted(candidates, key=lambda p: (p != resolved_current, str(p).lower()))
+
+
+def _switch_workspace(workspace_root: Path, state_mgr: SessionStateManager | None = None) -> None:
+    """Switch runtime workspace root for this REPL session."""
+    os.environ["WORKSPACE_ROOT"] = str(workspace_root.resolve())
+    if state_mgr is not None:
+        state_mgr.arke_root = workspace_root / ".arke"
+        state_mgr.state_path = state_mgr.arke_root / "state.json"
+
+
+def _prompt_workspace_selection(workspaces: list[Path], current_root: Path) -> Path:
+    """Interactive startup selector when multiple workspaces are discovered."""
+    if len(workspaces) <= 1 or not sys.stdin.isatty():
+        return current_root
+
+    print()
+    print(f"{T.ACCENT}Workspaces détectés:{T.RESET}")
+    for idx, ws in enumerate(workspaces, start=1):
+        marker = "(actuel)" if ws == current_root else ""
+        print(f"  {T.MUTED}{idx}.{T.RESET} {ws} {T.DIM}{marker}{T.RESET}")
+    print(f"  {T.MUTED}Entrée vide = conserver workspace actuel{T.RESET}")
+
+    try:
+        choice = input(f"{T.ACCENT}Sélection workspace › {T.RESET}").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return current_root
+
+    if not choice:
+        return current_root
+    if choice.lower() in ("n", "no", "non", "0"):
+        return current_root
+    if not choice.isdigit():
+        print(f"{T.MUTED}Sélection invalide, workspace actuel conservé.{T.RESET}")
+        return current_root
+
+    index = int(choice) - 1
+    if index < 0 or index >= len(workspaces):
+        print(f"{T.MUTED}Sélection hors plage, workspace actuel conservé.{T.RESET}")
+        return current_root
+    return workspaces[index]
+
+
+def _render_workspace_list(current_root: Path) -> None:
+    """Render detected workspace list in a compact panel."""
+    workspaces = _discover_workspaces(current_root)
+    lines = [f"{T.ACCENT}Workspaces disponibles{T.RESET}", ""]
+    if not workspaces:
+        lines.append(f"  {T.MUTED}Aucun workspace .arke détecté.{T.RESET}")
+    else:
+        for idx, ws in enumerate(workspaces, start=1):
+            marker = f" {T.SUCCESS}(actuel){T.RESET}" if ws == current_root else ""
+            lines.append(f"  {T.MUTED}{idx}.{T.RESET} {T.TEXT}{ws}{T.RESET}{marker}")
+    lines.append("")
+    lines.append(f"  {T.DIM}/workspace select <path> · /workspace sync{T.RESET}")
+    print()
+    print(T.box(lines, title="Workspace"))
+    print()
+
+
+def _render_current_workspace_tree(current_root: Path, max_depth: int = 2, max_items: int = 120) -> None:
+    """Display a concise tree view of the current session workspace."""
+    entries: list[str] = [f"{T.ACCENT}Workspace courant{T.RESET}", "", f"  {T.TEXT}{current_root}{T.RESET}", ""]
+    count = 0
+
+    def _walk(path: Path, depth: int) -> None:
+        nonlocal count
+        if depth > max_depth or count >= max_items:
+            return
+        try:
+            children = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except OSError:
+            return
+
+        for child in children:
+            if count >= max_items:
+                return
+            rel = child.relative_to(current_root)
+            indent = "  " + "  " * depth
+            suffix = "/" if child.is_dir() else ""
+            entries.append(f"{indent}{T.MUTED}•{T.RESET} {T.TEXT}{rel}{suffix}{T.RESET}")
+            count += 1
+            if child.is_dir():
+                _walk(child, depth + 1)
+
+    _walk(current_root, 0)
+    if count >= max_items:
+        entries.append(f"  {T.DIM}… affichage tronqué ({max_items} entrées max){T.RESET}")
+
+    print()
+    print(T.box(entries, title="/show_workspace"))
+    print()
+
+
+def _handle_workspace_command(raw: str, state_mgr: SessionStateManager) -> None:
+    """Handle `/workspace` slash command (list/select/sync)."""
+    parts = raw.split(maxsplit=2)
+    sub = parts[1].lower() if len(parts) > 1 else "help"
+    current_root = resolve_workspace_root()
+
+    if sub in ("help", "-h", "--help"):
+        print(f"{T.MUTED}Usage: /workspace list | /workspace select <path> | /workspace sync{T.RESET}")
+        return
+
+    if sub == "list":
+        _render_workspace_list(current_root)
+        return
+
+    if sub == "select":
+        if len(parts) < 3:
+            print(f"{T.MUTED}Usage: /workspace select <path>{T.RESET}")
+            return
+
+        raw_target = parts[2].strip()
+        target = Path(raw_target).expanduser()
+        if not target.is_absolute():
+            target = (current_root / target).resolve()
+        else:
+            target = target.resolve()
+
+        if not target.exists() or not target.is_dir():
+            print(f"{T.ERROR}Workspace invalide: {target}{T.RESET}")
+            return
+
+        init_result = ensure_arke_workspace(target)
+        for warning in init_result.warnings:
+            print(f"{T.WARNING}Warning: workspace init issue ({warning}){T.RESET}")
+
+        _switch_workspace(target, state_mgr=state_mgr)
+        print(f"{T.SUCCESS}Workspace chargé: {target}{T.RESET}")
+        return
+
+    if sub == "sync":
+        init_result = ensure_arke_workspace(current_root)
+        for warning in init_result.warnings:
+            print(f"{T.WARNING}Warning: workspace init issue ({warning}){T.RESET}")
+        updated = update_last_synced_workspace(current_root, current_root)
+        if updated:
+            print(f"{T.SUCCESS}Workspace synchronisé: {current_root}{T.RESET}")
+        else:
+            print(f"{T.ERROR}Impossible de mettre à jour last_synced_workspace.{T.RESET}")
+        return
+
+    print(f"{T.MUTED}Sous-commande inconnue: {sub}. Utilisez /workspace help.{T.RESET}")
 
 
 def _load_env_file() -> None:
@@ -1043,6 +1216,15 @@ def start() -> None:
     _load_env_file()
     _silence_logs()
 
+    startup_root = resolve_workspace_root()
+    _switch_workspace(startup_root)
+
+    startup_init = ensure_arke_workspace(startup_root)
+    for warning in startup_init.warnings:
+        print(f"{T.WARNING}Warning: workspace init issue ({warning}){T.RESET}")
+    if startup_init.created:
+        print(f"{T.MUTED}Initialized local workspace at {startup_init.arke_root}{T.RESET}")
+
     from arke.memory.manager import MemoryManager
     import shutil
 
@@ -1510,9 +1692,6 @@ def start() -> None:
             _last_cig[0] = None
             _last_cig[1] = ""
 
-        # Print user block in the thread
-        print(T.user_block(raw))
-
         result = route(raw)
 
         # --- Slash commands --------------------------------------------------
@@ -1556,6 +1735,12 @@ def start() -> None:
 
             elif cmd == "/about":
                 _print_about()
+
+            elif cmd == "/workspace":
+                _handle_workspace_command(raw, state_mgr)
+
+            elif cmd == "/show_workspace":
+                _render_current_workspace_tree(resolve_workspace_root())
 
             elif cmd == "/config":
                 from arke.chat_config import run_config
@@ -1649,18 +1834,6 @@ def start() -> None:
                     pass
                 print(f"{T.WARNING}⚠ [agent] Mode exécution actif — outils système disponibles.{T.RESET}")
 
-            # Workspace View System (WVS) commands
-            elif cmd.startswith("/show_"):
-                from arke.commands.workspace_commands import get_workspace_command_handler
-                handler = get_workspace_command_handler(cmd)
-                if handler:
-                    try:
-                        handler()
-                    except Exception as e:
-                        print(f"{T.ERROR}Workspace command error: {e}{T.RESET}")
-                else:
-                    print(f"{T.ERROR}Unknown workspace command: {cmd}{T.RESET}")
-
             else:
                 print(f"{T.MUTED}Commande inconnue : {cmd}. Tapez /help pour la liste.{T.RESET}")
 
@@ -1679,6 +1852,8 @@ def start() -> None:
         # --- Agent execution (unified via orchestrator) ----------------------
         # All non-slash, non-@model messages route here (agent-first principle)
         if result.kind == RouteKind.LLM_AGENT:
+            # User bubble is shown only for validated agent messages.
+            print(T.user_block(raw))
             # Phase 4: count user turns that actually trigger an agent response.
             state_mgr.record_message()
             # Track agent decision in anti-drift metrics
@@ -1863,10 +2038,7 @@ def _print_help() -> None:
         f"{T.ACCENT}Commandes slash{T.RESET}",
         "",
     ]
-    # Display commands, but filter out /show_* sub-commands (shown only in /show_workspace)
     for cmd, desc in SLASH_COMMANDS.items():
-        if cmd.startswith("/show_") and cmd != "/show_workspace":
-            continue  # Skip sub-commands; they're shown in /show_workspace output
         lines.append(f"  {T.BOLD}{cmd:<10}{T.RESET} {T.MUTED}{desc}{T.RESET}")
     lines.append("")
     lines.append(f"{T.ACCENT}Alias de modèles{T.RESET}")
