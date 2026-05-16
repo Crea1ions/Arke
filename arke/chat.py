@@ -22,8 +22,10 @@ import json
 import os
 import re
 import readline  # noqa: F401 — side-effect: enables readline in input()
+import shutil
 import sys
 import threading
+import textwrap
 import time
 import uuid
 from datetime import datetime, timezone
@@ -73,6 +75,107 @@ from arke.rendering.input_normalizer import InputNormalizer  # noqa: E402
 
 _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
 _CAPABILITY_REFERENCE_PATH = "memory/mcp_reference.md"
+
+_ABOUT_MARKDOWN = """# À propos d'Arke
+
+**Arke** n'est pas un assistant.  
+C'est une fondation commune pour penser et construire.
+
+> *Du chaos LLM au cosmos ordonné.*
+
+---
+
+## L'origine
+
+Tout est parti d'une vidéo. Eliott Meunier y défend une thèse radicale : **il ne faut plus créer d'interfaces utilisateur pour les outils basés sur l'IA.** Son constat est sans appel — chaque interface qu'il a construite a généré une dette technique constante, une dette de sécurité permanente, et une complexité sans valeur ajoutée. L'interface, censée faciliter l'interaction, était devenue le problème.
+
+Ce message a fait basculer la réflexion. Si l'interface est le problème, quel est le système qui n'en a pas besoin ? Un système conversationnel, direct, où rien ne s'interpose entre l'intention humaine et l'action. Où l'agent ne subit pas l'outil — il le sollicite.
+
+Mais il fallait un cadre. Les agents LLM sont puissants mais instables : ils hallucinent, dérivent, prennent des décisions implicites. Leur donner plus d'autonomie sans garde-fou, c'est amplifier le chaos. Il fallait une architecture qui encadre sans brider, qui soutienne sans décider.
+
+C'est cette architecture — les modes, les contrats cognitifs, la séparation stricte entre décision et exécution, le local-first, la traçabilité — qui a fait émerger quelque chose de plus profond. En cherchant un nom pour le projet, un mot s'est imposé : **Arke**. Et de ce nom sont nés les autres. Comme si le vocabulaire grec ancien, avec sa densité et sa précision, attendait d'être convoqué pour dire exactement ce que le système était en train de devenir.
+
+Les axiomes ne sont pas le point de départ. Ils sont la définition la plus fidèle que j'aie trouvée de ce que l'architecture avait déjà commencé à produire.
+
+---
+
+## Les trois piliers
+
+### Archè (Ἀρχὴ) — Le Principe
+
+En grec ancien, ἀρχὴ désigne à la fois le principe, l'origine, le commandement et le fondement. C'est l'élément premier d'où tout émerge — l'eau pour Thalès, l'apeiron pour Anaximandre.
+
+Dans Arke, **Archè est l'agent** : le lieu unique de la décision. Rien ne se déclenche sans lui. Le système est inerte jusqu'à ce que l'agent décide.
+
+> *Que faire ?*
+
+### Themelios (θεμέλιος) — La Fondation
+
+Dérivé de *thema* — ce qui est posé —, θεμέλιος désigne la pierre de fondation. En architecture, c'est le socle qui garantit la stabilité. Il ne décide jamais de la forme du bâtiment, mais sans lui tout s'effondre.
+
+Dans Arke, **Themelios est le système** : l'infrastructure qui fournit les outils, trace les actions, isole les exécutions, et garde le cap. Il soutient sans orienter. Il ne pense pas. Il ne dérive pas.
+
+> *Sur quoi s'appuyer ?*
+
+### Cosmos (Κόσμος) — L'Ordre Émergent
+
+Pour les Grecs, le κόσμος s'oppose au χάος — le chaos informe et désordonné. Le cosmos est l'univers ordonné, structuré, beau parce que cohérent.
+
+Dans Arke, **Cosmos est le résultat** : chaque action est tracée, chaque décision est explicite, chaque mode a son rôle. L'ordre n'est pas imposé — il émerge de la relation entre Archè qui décide et Themelios qui soutient.
+
+> *Quel est le résultat ?*
+
+---
+
+## La relation
+
+Archè (Décision) → Themelios (Support) → Cosmos (Ordre)
+
+Archè initie. Themelios soutient. Cosmos émerge.
+Pourquoi le grec ancien
+
+Les concepts grecs ne sont pas un artifice. Ils sont simplement le vocabulaire le plus précis que j'aie trouvé pour nommer ce que le système fait déjà. Un LLM, entraîné sur des corpus multilingues et philosophiques, comprend ces structures sans effort. Là où une longue spécification technique peut être ignorée ou mal interprétée, un axiome grec est saisi immédiatement dans sa profondeur. Il dit beaucoup avec peu. C'est exactement ce dont un agent a besoin.
+Le workflow conseillé
+
+Arke s'adapte à votre façon de penser, pas l'inverse :
+
+    Questionner (/ask) — Explorez l'idée. L'agent réfléchit avec vous, sans outils, sans distraction.
+    Chercher (/search) — Si le contexte manque, explorez. L'agent fouille, il lit, il ne modifie rien.
+    Structurer (/plan) — Quand la direction est claire, préparez. L'agent organise, anticipe, ne lance rien.
+    Construire (/agent) — Passez à l'action. L'agent exécute, corrige, vous montre le résultat.
+
+Les modes sont des espaces de travail, pas des prisons.
+Ce que le système ne fait jamais
+
+    Il ne choisit pas d'outil à votre place.
+    Il n'interprète pas vos intentions.
+    Il n'engage pas une conversation de lui-même.
+    Il ne prend pas de décision implicite.
+    Il ne dérive pas.
+
+Chaque action est tracée. Chaque décision est explicite. Chaque mode est un contrat clair.
+Pourquoi local-first
+
+Vos idées méritent de rester chez vous. Arke fonctionne entièrement en local : mémoire SQLite par projet, recherche vectorielle locale, sandbox pour les commandes, API externes uniquement en dernier recours.
+La vision
+
+    Un espace de travail où l'humain pense, l'agent exécute, et le système garantit que rien ne dérive.
+
+Arke n'est pas un produit fini. C'est une architecture ouverte, une fondation sur laquelle construire.
+
+Arke — Développé par devdipper.
+Open source (MIT).
+
+"Une fondation commune pour penser et construire."
+"""
+
+_ABOUT_STANDALONE_LABELS = {
+    "Pourquoi le grec ancien",
+    "Le workflow conseillé",
+    "Ce que le système ne fait jamais",
+    "Pourquoi local-first",
+    "La vision",
+}
 
 # Maximum lines of tool step output shown per tool execution.
 _MAX_STEP_LINES = 20
@@ -2275,30 +2378,74 @@ def _print_memory(mm: Any) -> None:
 
 
 def _print_about() -> None:
-    """Display Arke identity and philosophy."""
-    from arke import chat_theme as T
+    """Display Arke identity and philosophy in responsive full-flow mode."""
+    term_width = min(max(shutil.get_terminal_size((80, 24)).columns, 60), 120)
+    content_width = max(40, term_width - 2)
+    lines = _render_wrapped_markdown_lines(_ABOUT_MARKDOWN, content_width)
+    print()
+    for line in lines:
+        print(line)
+    print()
 
-    lines = [
-        f"  {T.ACCENT}{T.BOLD}Arke{T.RESET}  {T.MUTED}du grec ἀρχή (arkhḗ) : commencement, principe{T.RESET}",
-        "",
-        f"  {T.DIM}« Le commencement est la moitié de tout. »{T.RESET}",
-        "",
-        f"  {T.MUTED}Construit avec{T.RESET}  Python · Rust · SQLite · MCP",
-        "",
-        f"  {T.ACCENT}Philosophie{T.RESET}",
-        "",
-        f"    {T.TEXT}Minimal Abstraction{T.RESET}",
-        f"    {T.TEXT}Maximum Execution{T.RESET}",
-        "",
-        f"  {T.ACCENT}Architecture{T.RESET}",
-        "",
-        f"    {T.TEXT}L'agent décide{T.RESET}",
-        f"    {T.TEXT}Le système exécute{T.RESET}",
-        "",
-        f"  {T.MUTED}243 tests · sandbox actif · mémoire FTS5{T.RESET}",
-        "",
-        f"  {T.DIM}~/dev/APP/003-Agent-Autonome-Arke{T.RESET}",
-    ]
-    print()
-    print(T.box(lines, title="À propos"))
-    print()
+
+def _render_wrapped_markdown_lines(markdown_text: str, width: int) -> list[str]:
+    renderer = MarkdownRenderer()
+    output: list[str] = []
+    paragraph: list[str] = []
+
+    def flush_paragraph() -> None:
+        if not paragraph:
+            return
+        wrapped = textwrap.wrap(" ".join(s.strip() for s in paragraph), width=width)
+        for part in wrapped:
+            output.append(renderer.render(part, style_context="normal"))
+        paragraph.clear()
+
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if not stripped:
+            flush_paragraph()
+            output.append("")
+            continue
+
+        if (
+            stripped == "---"
+            or stripped in _ABOUT_STANDALONE_LABELS
+            or stripped.startswith("#")
+            or stripped.startswith(">")
+            or raw_line.startswith("    ")
+        ):
+            flush_paragraph()
+            if stripped == "---":
+                output.append("-" * min(width, 72))
+                continue
+            if raw_line.startswith("    "):
+                wrapped = textwrap.wrap(
+                    raw_line.strip(),
+                    width=width,
+                    initial_indent="    ",
+                    subsequent_indent="    ",
+                )
+                for part in wrapped:
+                    output.append(renderer.render(part, style_context="normal"))
+                continue
+            if stripped.startswith(">"):
+                quote = stripped[1:].strip()
+                wrapped = textwrap.wrap(
+                    quote,
+                    width=max(10, width - 2),
+                    initial_indent="> ",
+                    subsequent_indent="> ",
+                )
+                for part in wrapped:
+                    output.append(renderer.render(part, style_context="normal"))
+                continue
+            output.append(renderer.render(stripped, style_context="normal"))
+            continue
+
+        paragraph.append(line)
+
+    flush_paragraph()
+    return output

@@ -11,10 +11,19 @@ Tests cover:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from arke.mode_manager import MODE_PERMISSIONS, can_execute_tool
 from arke.chat_router import SLASH_COMMANDS
+
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +135,37 @@ class TestModeSlashCommands:
         for cmd in ("/ask", "/search", "/plan", "/agent"):
             desc = SLASH_COMMANDS.get(cmd, "")
             assert desc, f"Expected non-empty description for {cmd}"
+
+    def test_about_registered(self):
+        assert "/about" in SLASH_COMMANDS
+
+
+class TestAboutCommand:
+    def test_print_about_contains_core_sections(self, capsys):
+        import arke.chat as _chat
+
+        _chat._print_about()
+        out = capsys.readouterr().out
+
+        assert "À propos" in out
+        assert "Tout est parti d'une vidéo." in out
+        assert "Archè" in out
+        assert "Themelios" in out
+        assert "Cosmos" in out
+        assert "/ask" in out
+        assert "/search" in out
+        assert "/plan" in out
+        assert "/agent" in out
+        assert "╭" not in out
+        assert "╰" not in out
+
+    def test_about_wrapped_lines_fit_width(self):
+        import arke.chat as _chat
+
+        lines = _chat._render_wrapped_markdown_lines(_chat._ABOUT_MARKDOWN, 74)
+        assert lines
+        for line in lines:
+            assert len(_strip_ansi(line)) <= 74
 
 
 # ---------------------------------------------------------------------------
