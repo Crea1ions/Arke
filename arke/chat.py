@@ -1226,7 +1226,7 @@ def start() -> None:
         print(f"{T.MUTED}Initialized local workspace at {startup_init.arke_root}{T.RESET}")
 
     from arke.memory.manager import MemoryManager
-    import shutil
+    from arke.ui.banner import generate_banner
 
     mm = MemoryManager()
 
@@ -1234,9 +1234,10 @@ def start() -> None:
     arke_root = Path(os.environ.get("WORKSPACE_ROOT", ".")) / ".arke"
     state_mgr = SessionStateManager(arke_root)
 
-    # Detect sandbox for banner footer
-    sandbox_ok = bool(shutil.which("bwrap"))
-    print(T.banner(sandbox=sandbox_ok))
+    # Stateless visual banner (no startup prompt/scan/migration side effects).
+    workspace_path = str(Path(os.environ.get("WORKSPACE_ROOT", startup_root)).resolve())
+    print(f"{T.MUTED}repository  {workspace_path}{T.RESET}")
+    print("\n".join(generate_banner(workspace_path, _get_alias(), "ask")))
     print()
 
     _ctrl_c_count = [0]

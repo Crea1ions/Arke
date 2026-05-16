@@ -59,7 +59,7 @@ Only memory accumulation over time.
 
 | Feature                        | Purpose                                                        |
 | ------------------------------ | -------------------------------------------------------------- |
-| **Agent Modes**                | `/ask` `/search` `/plan` `/dev` — tool gating per mode         |
+| **Agent Modes**                | `/ask` `/search` `/plan` `/agent` — tool gating per mode       |
 | **Unified Endpoint**           | Single interface for CLI, filesystem, memory, APIs, MCP        |
 | **Deterministic Orchestrator** | Execution layer with strict validation gates                   |
 | **SQLite Memory System**       | Global / project / session / cache storage (FTS5 + sqlite-vec) |
@@ -210,7 +210,7 @@ The user must explicitly switch modes to grant tool access.
 | `/ask`    | **none** — direct LLM response only               | Discussion, questions, concepts   |
 | `/search` | SQLite, memory FTS/vector, web, calculator        | Read-only research                |
 | `/plan`   | memory read/write, SQLite, vector                 | Structured planning and reasoning |
-| `/dev`    | **all** (unrestricted)                            | Implementation, files, CLI        |
+| `/agent`  | **all** (unrestricted)                            | Implementation, files, CLI        |
 
 Enforcement is double-gated: pre-orchestrator check in `chat.py` and inside `orchestrator._dispatch()`.
 The active mode is displayed in the REPL prompt (`[ask] ›`) and injected into the cognitive contract.
@@ -218,6 +218,16 @@ The active mode is displayed in the REPL prompt (`[ask] ›`) and injected into 
 ### Workspace root
 
 Arke now uses the caller workspace as the default execution root when `WORKSPACE_ROOT` is not explicitly set.
+
+### REPL startup
+
+The REPL now starts without blocking startup prompts.
+
+* no automatic workspace selection prompt
+* no automatic legacy migration prompt
+* manual workspace actions only via `/workspace list`, `/workspace select`, `/workspace sync`
+* startup banner rendered once with repository path displayed first
+* compact fallback banner when terminal width or Unicode support is insufficient
 The legacy WCU tree (`arke-workspace/WCU`) is treated as an optional artifact for workspace views only: it is not auto-created and is not synced from the launcher directory.
 
 ---
