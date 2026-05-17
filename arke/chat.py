@@ -89,7 +89,7 @@ def _shorten_home_path(raw_path: str) -> str:
 
 _ABOUT_MARKDOWN = """# À propos d'Arke
 
-- **Arke** est un agent conversationnel local-first pensé    comme une fondation de travail, de réflexion et de  construction. Ce n'est pas un produit fini. C'est une expérimentation.
+- **Arke** est un agent conversationnel local-first pensé comme une fondation de travail, de réflexion et de construction. Ce n'est pas un produit fini. C'est une expérimentation.
 
 - Le déclencheur est venu d'une réflexion simple, amorcée par une vidéo d'Eliott Meunier : si les agents deviennent capables de comprendre le langage, d'utiliser des outils et de naviguer entre des services, alors le chat pourrait devenir une couche d'interaction universelle — sans avoir besoin de construire une interface pour chaque outil.
 
@@ -121,7 +121,7 @@ _ABOUT_MARKDOWN = """# À propos d'Arke
 
 ---
 
-## Les trois piliers
+## Les quatre piliers
 
 ### Archè (Ἀρχὴ) — Le Principe
 
@@ -147,14 +147,26 @@ _ABOUT_MARKDOWN = """# À propos d'Arke
 
 > *Quel est le résultat ?*
 
+### Koinonia (Κοινωνία) — La Co-Évolution
+
+- **Κοινωνία** désigne la **communauté**, la **participation**, le **partage** et le lien vivant qui unit les membres autour d'un but commun. C'est l'espace où l'individu et le groupe ne sont plus séparés, mais forment un écosystème unique en constante évolution.
+
+- Dans **Arke**, **Koinonia est la relation** : le substrat vivant où l'humain et le système ne sont plus opposés (utilisateur vs outil), mais deviennent un **partenaire cognitif**. C'est ici que se joue la véritable valeur : non pas dans l'autonomie totale de l'agent, mais dans la **co-évolution** continue.
+
+- Arke ne cherche pas à **programmer** des comportements spécifiques. Il cherche à **cultiver les conditions** de leur émergence. Comme un jardinier qui prépare le sol, choisit les graines et protège les équilibres sans forcer la croissance, Arke pose des **invariants** structurels et laisse **émerger** la dynamique.
+
+- C'est une **ingénierie de l'émergence** : accepter une perte de contrôle partielle pour gagner en richesse, en adaptabilité et en vie. La valeur naît de la **coopération**, de l'ajustement mutuel et de la confiance dans la relation.
+
+> *Comment cela vit-il ?*
+
+---
 
 ## La relation
 
+- **Archè** (Décision) → **Koinonia** (Co-Évolution) → **Cosmos** (Ordre Émergent)
+- **Themelios** soutient ce cycle en garantissant la stabilité du sol.
 
-- Archè (Décision) → Themelios (Support) → Cosmos (Ordre)
-
-
-- Archè initie. Themelios soutient. Cosmos émerge.
+- **Archè** initie. **Koinonia** permet l'interaction. **Cosmos** émerge.
 
 ---
 
@@ -202,7 +214,6 @@ _ABOUT_MARKDOWN = """# À propos d'Arke
 Open source (MIT).
 
 *« Une fondation commune pour penser et construire. »*
-"
 """
 
 _ABOUT_STANDALONE_LABELS = {
