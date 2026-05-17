@@ -148,10 +148,11 @@ class TestAboutCommand:
         out = capsys.readouterr().out
 
         assert "À propos" in out
-        assert "Tout est parti d'une vidéo." in out
+        assert "Les trois piliers" in out
         assert "Archè" in out
         assert "Themelios" in out
         assert "Cosmos" in out
+        assert "Les modes de travail" in out
         assert "/ask" in out
         assert "/search" in out
         assert "/plan" in out
@@ -173,6 +174,24 @@ class TestAboutCommand:
         lines = _chat._render_wrapped_markdown_lines(_chat._ABOUT_MARKDOWN, 74)
         plain = [_strip_ansi(line) for line in lines]
         assert any(line and set(line) == {"─"} for line in plain)
+
+    def test_about_preserves_markdown_table_rows(self):
+        import arke.chat as _chat
+
+        markdown = """## Les modes de travail
+
+| Mode | Rôle |
+|------|------|
+| `/ask` | Explorer une idée. |
+| `/search` | Inspecter un contexte. |
+"""
+        lines = _chat._render_wrapped_markdown_lines(markdown, 74)
+        plain = [_strip_ansi(line) for line in lines if line.strip()]
+
+        assert "| Mode | Rôle |" in plain
+        assert "|------|------|" in plain
+        assert any("| /ask" in line and "Explorer une idée." in line for line in plain)
+        assert any("| /search" in line and "Inspecter un contexte." in line for line in plain)
 
 
 class TestRepositoryPathDisplay:

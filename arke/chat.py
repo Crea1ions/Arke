@@ -89,24 +89,35 @@ def _shorten_home_path(raw_path: str) -> str:
 
 _ABOUT_MARKDOWN = """# À propos d'Arke
 
-**Arke** n'est pas un assistant.  
-C'est une fondation commune pour penser et construire.
+- **Arke** est un agent conversationnel local-first pensé    comme une fondation de travail, de réflexion et de  construction. Ce n'est pas un produit fini. C'est une expérimentation.
 
-> *Du chaos LLM au cosmos ordonné.*
+- Le déclencheur est venu d'une réflexion simple, amorcée par une vidéo d'Eliott Meunier : si les agents deviennent capables de comprendre le langage, d'utiliser des outils et de naviguer entre des services, alors le chat pourrait devenir une couche d'interaction universelle — sans avoir besoin de construire une interface pour chaque outil.
+
+- Cette vision pose un problème immédiat : les systèmes basés sur les LLM sont imprévisibles, opaques, difficiles à maîtriser. C'est ce qui a amené Arke vers une réflexion plus architecturale : comment construire un agent flexible sans perdre la lisibilité, la stabilité et le contrôle humain ?
+
+- Une grande partie du développement est réalisée avec des modèles gratuits ou limités volontairement. Non pas parce qu'ils sont « meilleurs », mais parce que cette contrainte oblige à penser autrement : architecture, robustesse, clarté des responsabilités, gestion du contexte, simplicité des interactions, maîtrise du système. Le projet ne cherche pas à « faire mieux que tout le monde ». Il cherche à comprendre comment construire des agents plus cohérents, plus lisibles, plus contrôlables, et plus durables dans le temps.
 
 ---
 
-## L'origine
+## Une architecture pensée comme une fondation
 
-Tout est parti d'une vidéo. Eliott Meunier y défend une thèse radicale : **il ne faut plus créer d'interfaces utilisateur pour les outils basés sur l'IA.** Son constat est sans appel — chaque interface qu'il a construite a généré une dette technique constante, une dette de sécurité permanente, et une complexité sans valeur ajoutée. L'interface, censée faciliter l'interaction, était devenue le problème.
+- Une partie importante de l'approche derrière Arke est influencée par des années passées dans des environnements où la **structure** et les **contraintes** réelles ont une importance centrale : **construction, rénovation, coordination, adaptation et résolution de problèmes sur le terrain.**
 
-Ce message a fait basculer la réflexion. Si l'interface est le problème, quel est le système qui n'en a pas besoin ? Un système conversationnel, direct, où rien ne s'interpose entre l'intention humaine et l'action. Où l'agent ne subit pas l'outil — il le sollicite.
+- Dans ces domaines, certaines idées deviennent naturelles : une **fondation** fragile finit toujours par créer des problèmes plus tard, la complexité doit être contenue avant de devenir incontrôlable, une structure claire simplifie tout ce qui vient ensuite, et les systèmes les plus solides ne sont pas forcément les plus compliqués.
 
-Mais il fallait un cadre. Les agents LLM sont puissants mais instables : ils hallucinent, dérivent, prennent des décisions implicites. Leur donner plus d'autonomie sans garde-fou, c'est amplifier le chaos. Il fallait une architecture qui encadre sans brider, qui soutienne sans décider.
+- Cette logique a profondément influencé la manière dont Arke est conçu. L'objectif n'est pas de créer le système « le plus intelligent ». Mais plutôt un système compréhensible, modulaire, extensible, traçable, capable d'évoluer sans perdre sa cohérence.
 
-C'est cette architecture — les modes, les contrats cognitifs, la séparation stricte entre décision et exécution, le local-first, la traçabilité — qui a fait émerger quelque chose de plus profond. En cherchant un nom pour le projet, un mot s'est imposé : **Arke**. Et de ce nom sont nés les autres. Comme si le vocabulaire grec ancien, avec sa densité et sa précision, attendait d'être convoqué pour dire exactement ce que le système était en train de devenir.
+- **L'architecture** n'est donc pas vue ici comme un détail technique secondaire. Elle est la structure qui permet au projet de rester maintenable à long terme.
 
-Les axiomes ne sont pas le point de départ. Ils sont la définition la plus fidèle que j'aie trouvée de ce que l'architecture avait déjà commencé à produire.
+---
+
+## Les axiomes grecs
+
+- En cherchant une **identité** pour le projet, les recherches autour des concepts grecs anciens ont révélé quelque chose d'intéressant : ces termes possèdent une **densité philosophique** et structurelle particulièrement adaptée à des systèmes basés sur le langage. Les LLM comprennent naturellement ces concepts, leurs nuances, leurs relations, et les structures d'idées qu'ils transportent.
+
+- Le nom « **Arke** » a alors commencé à prendre une place centrale. Le terme résonnait à plusieurs niveaux : origine, principe, fondation, commencement, structure.
+
+- Puis, progressivement, d'autres **axiomes** sont venus compléter cette cohérence conceptuelle. Non pas comme des vérités absolues, ni comme une tentative de mythologiser le projet, mais comme un langage commun permettant de représenter certaines idées fondatrices du système.
 
 ---
 
@@ -114,70 +125,84 @@ Les axiomes ne sont pas le point de départ. Ils sont la définition la plus fid
 
 ### Archè (Ἀρχὴ) — Le Principe
 
-En grec ancien, ἀρχὴ désigne à la fois le principe, l'origine, le commandement et le fondement. C'est l'élément premier d'où tout émerge — l'eau pour Thalès, l'apeiron pour Anaximandre.
+- En grec ancien, **ἀρχὴ** est un terme fondateur de la philosophie présocratique. Il désigne à la fois le commencement, le **principe premier**, le commandement et le **fondement**. Pour Thalès, l'ἀρχὴ était l'eau — l'élément originel d'où tout émerge. Pour Anaximandre, c'était l'ἄπειρον, l'illimité, la substance indéterminée qui précède toute chose. Pour Anaximène, l'air. Chacun cherchait ce point unique, cette impulsion initiale qui explique tout le reste.
 
-Dans Arke, **Archè est l'agent** : le lieu unique de la décision. Rien ne se déclenche sans lui. Le système est inerte jusqu'à ce que l'agent décide.
+- Dans **Arke**, Archè est **l'agent** : le lieu unique de la **décision.** Rien ne se déclenche sans lui. Le système est inerte jusqu'à ce que l'agent **décide**. C'est **l'impulsion** initiale qui lance le **raisonnement,** l'intention qui précède **l'action.** Comme l'ἀρχὴ des présocratiques, tout part de là.
 
 > *Que faire ?*
 
 ### Themelios (θεμέλιος) — La Fondation
 
-Dérivé de *thema* — ce qui est posé —, θεμέλιος désigne la pierre de fondation. En architecture, c'est le socle qui garantit la stabilité. Il ne décide jamais de la forme du bâtiment, mais sans lui tout s'effondre.
+- **θεμέλιος** dérive de θέμα (*thema* — ce qui est posé, ce qui est établi) et de τίθημι (*tithēmi* — poser, placer, établir). Dans l'architecture grecque antique, le θεμέλιος désigne la pierre de fondation, le **soubassement** sur lequel repose l'édifice entier. Il n'est pas visible une fois le bâtiment achevé, mais sans lui, rien ne tient. Les Grecs ne construisaient jamais sans s'assurer d'abord de la **solidité** du θεμέλιος.
 
-Dans Arke, **Themelios est le système** : l'infrastructure qui fournit les outils, trace les actions, isole les exécutions, et garde le cap. Il soutient sans orienter. Il ne pense pas. Il ne dérive pas.
+- Dans Arke, **Themelios est le système** : **l'infrastructure** qui fournit les outils, trace les actions, isole les exécutions, et garde le cap. Il soutient sans orienter. Il ne pense pas. Il ne choisit pas. Il est le socle sur lequel l'agent peut décider en toute confiance.
 
 > *Sur quoi s'appuyer ?*
 
 ### Cosmos (Κόσμος) — L'Ordre Émergent
 
-Pour les Grecs, le κόσμος s'oppose au χάος — le chaos informe et désordonné. Le cosmos est l'univers ordonné, structuré, beau parce que cohérent.
+- En grec ancien, **κόσμος** signifie à la fois l'ordre, la parure et le monde ordonné. Il s'oppose directement au **χάος** — le chaos, l'informe, l'indifférencié, le désordre primordial. Pour les pythagoriciens, le κόσμος était l'univers régi par des proportions mathématiques et des harmonies. Pour Platon, c'était le monde ordonné par le démiurge, le résultat d'une mise en ordre du chaos. Le κόσμος n'est jamais un ordre statique imposé d'en haut — *c'est une harmonie qui **émerge** de **l'interaction** entre des parties complexes.*
 
-Dans Arke, **Cosmos est le résultat** : chaque action est tracée, chaque décision est explicite, chaque mode a son rôle. L'ordre n'est pas imposé — il émerge de la relation entre Archè qui décide et Themelios qui soutient.
+- Dans **Arke**, **Cosmos est le résultat** : l'agent (**Archè**) est un système **complexe** et parfois instable. Le **système** (Themelios) est **déterministe** et rigide. Pris séparément, chacun a ses limites. Mais quand ils interagissent dans un cadre clair — modes, contrats, traçabilité — *quelque chose de plus **cohérent émerge**. L'ordre n'est pas imposé. Il naît de la **relation.***
 
 > *Quel est le résultat ?*
 
----
 
 ## La relation
 
-Archè (Décision) → Themelios (Support) → Cosmos (Ordre)
 
-Archè initie. Themelios soutient. Cosmos émerge.
-Pourquoi le grec ancien
+- Archè (Décision) → Themelios (Support) → Cosmos (Ordre)
 
-Les concepts grecs ne sont pas un artifice. Ils sont simplement le vocabulaire le plus précis que j'aie trouvé pour nommer ce que le système fait déjà. Un LLM, entraîné sur des corpus multilingues et philosophiques, comprend ces structures sans effort. Là où une longue spécification technique peut être ignorée ou mal interprétée, un axiome grec est saisi immédiatement dans sa profondeur. Il dit beaucoup avec peu. C'est exactement ce dont un agent a besoin.
-Le workflow conseillé
 
-Arke s'adapte à votre façon de penser, pas l'inverse :
+- Archè initie. Themelios soutient. Cosmos émerge.
 
-    Questionner (/ask) — Explorez l'idée. L'agent réfléchit avec vous, sans outils, sans distraction.
-    Chercher (/search) — Si le contexte manque, explorez. L'agent fouille, il lit, il ne modifie rien.
-    Structurer (/plan) — Quand la direction est claire, préparez. L'agent organise, anticipe, ne lance rien.
-    Construire (/agent) — Passez à l'action. L'agent exécute, corrige, vous montre le résultat.
+---
 
-Les modes sont des espaces de travail, pas des prisons.
-Ce que le système ne fait jamais
+## Les modes de travail
 
-    Il ne choisit pas d'outil à votre place.
-    Il n'interprète pas vos intentions.
-    Il n'engage pas une conversation de lui-même.
-    Il ne prend pas de décision implicite.
-    Il ne dérive pas.
+- **Arke** est conçu comme un espace de travail conversationnel structuré autour de plusieurs modes cognitifs. Chaque mode possède un rôle clair.
 
-Chaque action est tracée. Chaque décision est explicite. Chaque mode est un contrat clair.
-Pourquoi local-first
+- **/ask**      Explorer une idée, réfléchir, comprendre, discuter.
+            Sans exécution ni modification.
 
-Vos idées méritent de rester chez vous. Arke fonctionne entièrement en local : mémoire SQLite par projet, recherche vectorielle locale, sandbox pour les commandes, API externes uniquement en dernier recours.
-La vision
+- **/search**   Chercher des informations, inspecter, lire, explorer
+            un contexte.
 
-    Un espace de travail où l'humain pense, l'agent exécute, et le système garantit que rien ne dérive.
+- **/plan**     Structurer un problème avant l'action. Découper,
+            organiser, anticiper.
 
-Arke n'est pas un produit fini. C'est une architecture ouverte, une fondation sur laquelle construire.
+- **/agent**    Passer à l'exécution avec visibilité et confirmation.
 
-Arke — Développé par devdipper.
+
+- Les modes ne sont pas des limitations arbitraires. Ils servent à **clarifier** les **responsabilités** du **système** et à limiter les comportements implicites.
+
+---
+
+## Une approche local-first
+
+- **Arke** privilégie une approche **locale** autant que possible : mémoire par projet, stockage local, outils locaux, recherche locale, exécutions contrôlées, dépendance minimale aux services externes.
+
+- L'objectif n'est pas l'isolement total, mais de conserver autant que possible la maîtrise, la transparence et la portabilité du système.
+
+---
+
+## La vision
+
+- **Arke** n'est pas un produit « terminé ». C'est une **fondation** en **évolution**.
+
+- Le projet commence volontairement dans un environnement simple : un **REPL**, un terminal, une **interface minimale**, et une architecture pensée pour rester **lisible.**
+
+- L'objectif n'est pas seulement de créer un **assistant** capable de **répondre** à des **questions**. Mais de poser les bases d'un système capable, à terme, de devenir un véritable **espace de travail conversationnel**, une couche **d'interaction** entre différents outils, et une **interface** plus naturelle entre **l'humain** et les systèmes **numériques.**
+
+- Peut-être que cette approche n'est **pas** la bonne. Peut-être qu'elle **évoluera** complètement avec le temps. Mais Arke existe précisément pour **explorer** cette question.
+
+---
+
+**Arke** — Développé par devdipper.  
 Open source (MIT).
 
-"Une fondation commune pour penser et construire."
+*« Une fondation commune pour penser et construire. »*
+"
 """
 
 _ABOUT_STANDALONE_LABELS = {
@@ -2462,6 +2487,7 @@ def _render_wrapped_markdown_lines(markdown_text: str, width: int) -> list[str]:
     for raw_line in markdown_text.splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
+        is_table_row = stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
 
         if not stripped:
             flush_paragraph()
@@ -2470,6 +2496,7 @@ def _render_wrapped_markdown_lines(markdown_text: str, width: int) -> list[str]:
 
         if (
             stripped == "---"
+            or is_table_row
             or stripped in _ABOUT_STANDALONE_LABELS
             or stripped.startswith("#")
             or stripped.startswith(">")
@@ -2478,6 +2505,55 @@ def _render_wrapped_markdown_lines(markdown_text: str, width: int) -> list[str]:
             flush_paragraph()
             if stripped == "---":
                 output.append("─" * min(width, 72))
+                continue
+            if is_table_row:
+                cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+                is_separator_row = bool(cells) and all(
+                    re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells
+                )
+                if is_separator_row or len(stripped) <= width:
+                    output.append(renderer.render(stripped, style_context="normal"))
+                    continue
+
+                col_count = max(1, len(cells))
+                fixed = (3 * col_count) + 1  # "| " + " | " * (n-1) + " |"
+                max_text_width = max(12, width - fixed)
+
+                if col_count == 2:
+                    # For mode tables, keep left column compact and give room to description.
+                    left_width = max(6, min(16, len(cells[0]) + 1))
+                    right_width = max(6, max_text_width - left_width)
+                    if left_width + right_width > max_text_width:
+                        right_width = max(6, max_text_width - left_width)
+                    col_widths = [left_width, right_width]
+                else:
+                    base = max(6, max_text_width // col_count)
+                    col_widths = [base] * col_count
+                    remaining = max_text_width - (base * col_count)
+                    idx = 0
+                    while remaining > 0:
+                        col_widths[idx] += 1
+                        idx = (idx + 1) % col_count
+                        remaining -= 1
+
+                wrapped_cells = [
+                    textwrap.wrap(
+                        cell,
+                        width=col_widths[idx],
+                        break_long_words=True,
+                        break_on_hyphens=False,
+                    ) or [""]
+                    for idx, cell in enumerate(cells)
+                ]
+
+                rows_count = max(len(parts) for parts in wrapped_cells)
+                for row_idx in range(rows_count):
+                    row_parts = []
+                    for col_idx, parts in enumerate(wrapped_cells):
+                        text_part = parts[row_idx] if row_idx < len(parts) else ""
+                        row_parts.append(text_part.ljust(col_widths[col_idx]))
+                    table_line = "| " + " | ".join(row_parts) + " |"
+                    output.append(renderer.render(table_line, style_context="normal"))
                 continue
             if raw_line.startswith("    "):
                 wrapped = textwrap.wrap(
