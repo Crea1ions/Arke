@@ -76,6 +76,17 @@ from arke.rendering.input_normalizer import InputNormalizer  # noqa: E402
 _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
 _CAPABILITY_REFERENCE_PATH = "memory/mcp_reference.md"
 
+
+def _shorten_home_path(raw_path: str) -> str:
+    """Render a local path with ~/ prefix when it lives under the home dir."""
+    resolved = Path(raw_path).expanduser().resolve()
+    home = Path.home().resolve()
+    try:
+        relative = resolved.relative_to(home)
+    except ValueError:
+        return str(resolved)
+    return f"~/{relative.as_posix()}"
+
 _ABOUT_MARKDOWN = """# À propos d'Arke
 
 **Arke** n'est pas un assistant.  
@@ -177,11 +188,25 @@ _ABOUT_STANDALONE_LABELS = {
     "La vision",
 }
 
+_A4_CONTENT_WIDTH = 88
+_MIN_CONTENT_WIDTH = 48
+
 # Maximum lines of tool step output shown per tool execution.
 _MAX_STEP_LINES = 20
 
 # Visual placeholder for newline in the paste-review prompt
 _PASTE_NL = " ↵ "
+
+
+def _compute_content_width(
+    term_columns: int | None = None,
+    *,
+    max_width: int = _A4_CONTENT_WIDTH,
+    min_width: int = _MIN_CONTENT_WIDTH,
+) -> int:
+    """Return bounded content width for comfortable reading on large screens."""
+    cols = term_columns if term_columns is not None else shutil.get_terminal_size((80, 24)).columns
+    return min(max(cols, min_width), max_width)
 
 
 def _read_paste_buffered(prompt: str) -> str:
@@ -623,15 +648,40 @@ class StreamingMarkdownDisplay:
         use_live: bool = True,
         show_internal_markup: bool = False,
         line_prefix: str = "",
+        first_line_prefix: str | None = None,
+        max_content_width: int = _A4_CONTENT_WIDTH,
         on_first_token: Any = None,
     ):
         self.buffer: list[str] = []
         self._started = False
         self._line_prefix = line_prefix
+        self._first_line_prefix = first_line_prefix if first_line_prefix is not None else line_prefix
+        self._emitted_visible_line = False
         self._at_line_start = True
         self._on_first_token = on_first_token
         self._renderer = MarkdownRenderer(show_internal_markup=show_internal_markup)
         self._line_accumulator = ""  # Collect tokens to render by lines
+        self._max_content_width = max_content_width
+
+    def _iter_wrapped_parts(self, raw_line: str) -> list[str]:
+        width = max(10, self._max_content_width)
+        if raw_line == "":
+            return [""]
+        wrapped = textwrap.wrap(
+            raw_line,
+            width=width,
+            replace_whitespace=False,
+            drop_whitespace=False,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+        return wrapped or [""]
+
+    def _prefix_for_line(self) -> str:
+        if not self._emitted_visible_line:
+            self._emitted_visible_line = True
+            return self._first_line_prefix
+        return self._line_prefix
 
     def add_token(self, token: str) -> None:
         """Emit token immediately with styling applied where possible.
@@ -656,20 +706,20 @@ class StreamingMarkdownDisplay:
         
         # All but the last element are complete lines (followed by \n)
         for line in lines[:-1]:
-            # Render this line with markdown styling
-            try:
-                styled = self._renderer.render(line) if line else ""
-            except Exception:  # noqa: BLE001
-                styled = line
+            for part in self._iter_wrapped_parts(line):
+                try:
+                    styled = self._renderer.render(part) if part else ""
+                except Exception:  # noqa: BLE001
+                    styled = part
 
-            # Apply line prefix for threading
-            if self._line_prefix:
-                styled = self._line_prefix + styled
+                prefix = self._prefix_for_line()
+                if prefix:
+                    styled = prefix + styled
 
-            # Emit with newline (streaming!)
-            sys.stdout.write(styled + "\n")
-            sys.stdout.flush()
-            self._at_line_start = True
+                # Emit with newline (streaming!)
+                sys.stdout.write(styled + "\n")
+                sys.stdout.flush()
+                self._at_line_start = True
 
         # Keep the last (incomplete) part in accumulator
         self._line_accumulator = lines[-1]
@@ -684,32 +734,39 @@ class StreamingMarkdownDisplay:
     def close(self) -> None:
         """Finalize: emit any remaining partial line."""
         if self._line_accumulator:
-            try:
-                styled = self._renderer.render(self._line_accumulator)
-            except Exception:  # noqa: BLE001
-                styled = self._line_accumulator
+            for part in self._iter_wrapped_parts(self._line_accumulator):
+                try:
+                    styled = self._renderer.render(part)
+                except Exception:  # noqa: BLE001
+                    styled = part
 
-            if self._line_prefix:
-                styled = self._line_prefix + styled
+                if self._line_prefix:
+                    prefix = self._prefix_for_line()
+                    styled = prefix + styled
 
-            sys.stdout.write(styled)
-            if not styled.endswith("\n"):
-                sys.stdout.write("\n")
-            sys.stdout.flush()
+                sys.stdout.write(styled)
+                if not styled.endswith("\n"):
+                    sys.stdout.write("\n")
+                sys.stdout.flush()
             self._line_accumulator = ""
 
     def close_inline(self) -> None:
         """Close for inline output."""
         if self._line_accumulator:
-            try:
-                styled = self._renderer.render(self._line_accumulator)
-            except Exception:  # noqa: BLE001
-                styled = self._line_accumulator
+            wrapped_parts = self._iter_wrapped_parts(self._line_accumulator)
+            for idx, part in enumerate(wrapped_parts):
+                try:
+                    styled = self._renderer.render(part)
+                except Exception:  # noqa: BLE001
+                    styled = part
 
-            if self._line_prefix:
-                styled = self._line_prefix + styled
+                if self._line_prefix:
+                    prefix = self._prefix_for_line()
+                    styled = prefix + styled
 
-            sys.stdout.write(styled)
+                sys.stdout.write(styled)
+                if idx < len(wrapped_parts) - 1:
+                    sys.stdout.write("\n")
             sys.stdout.flush()
             self._line_accumulator = ""
 
@@ -1338,8 +1395,7 @@ def start() -> None:
     state_mgr = SessionStateManager(arke_root)
 
     # Stateless visual banner (no startup prompt/scan/migration side effects).
-    workspace_path = str(Path(os.environ.get("WORKSPACE_ROOT", startup_root)).resolve())
-    print(f"{T.MUTED}repository  {workspace_path}{T.RESET}")
+    workspace_path = _shorten_home_path(os.environ.get("WORKSPACE_ROOT", startup_root))
     print("\n".join(generate_banner(workspace_path, _get_alias(), "ask")))
     print()
 
@@ -1429,15 +1485,18 @@ def start() -> None:
                 sys.stdout.write("\033[1A\033[2K")
                 sys.stdout.flush()
                 print(T.agent_header(alias))
-                print(T.BORDER + "│" + T.RESET)
                 _header_shown[0] = True
 
         # Setup streaming display — thread framing via line_prefix.
-        _line_prefix = f"{T.BORDER}│{T.RESET}  "
+        _line_prefix = "    "
+        _first_line_prefix = f"{T.BORDER}{T.BLOCK_MARKER}└─{T.RESET} "
+        _content_width = _compute_content_width()
         stream_display = StreamingMarkdownDisplay(
             use_live=True,
             show_internal_markup=False,
             line_prefix=_line_prefix,
+            first_line_prefix=_first_line_prefix,
+            max_content_width=max(20, _content_width - len(_line_prefix)),
             on_first_token=_show_agent_header,
         )
 
@@ -2379,8 +2438,7 @@ def _print_memory(mm: Any) -> None:
 
 def _print_about() -> None:
     """Display Arke identity and philosophy in responsive full-flow mode."""
-    term_width = min(max(shutil.get_terminal_size((80, 24)).columns, 60), 120)
-    content_width = max(40, term_width - 2)
+    content_width = _compute_content_width()
     lines = _render_wrapped_markdown_lines(_ABOUT_MARKDOWN, content_width)
     print()
     for line in lines:
@@ -2419,7 +2477,7 @@ def _render_wrapped_markdown_lines(markdown_text: str, width: int) -> list[str]:
         ):
             flush_paragraph()
             if stripped == "---":
-                output.append("-" * min(width, 72))
+                output.append("─" * min(width, 72))
                 continue
             if raw_line.startswith("    "):
                 wrapped = textwrap.wrap(

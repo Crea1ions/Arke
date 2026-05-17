@@ -88,13 +88,14 @@ def _truncate(text: str, width: int) -> str:
 
 
 def _separator(width: int, cap: int) -> str:
-    return "-" * max(1, min(width, cap))
+    return "─" * max(1, min(width, cap))
 
 
 def build_banner_lines(context: dict) -> list[str]:
     width = int(context.get("width") or 80)
     workspace = str(context.get("workspace") or "")
     workspace_name = workspace.rstrip("/").split("/")[-1] if workspace else "unknown"
+    workspace_value = workspace if workspace else workspace_name
     model = str(context.get("model") or "flash")
     mode = str(context.get("mode") or "ask")
     is_compact = bool(context.get("is_compact", width < MIN_WIDTH or not supports_unicode()))
@@ -104,7 +105,7 @@ def build_banner_lines(context: dict) -> list[str]:
         return [
             "ARKE-AGENT",
             _truncate("- Une fondation commune pour penser et construire.", width),
-            _truncate("- arche · themelios", width),
+            _truncate("- Arche · Themelios · Cosmos", width),
             sep,
             _truncate("/ask /search /plan /agent /help", width),
             _truncate(f'@"model" switch models LLM ({model})', width),
@@ -124,7 +125,7 @@ def build_banner_lines(context: dict) -> list[str]:
         *title_lines,
         "",
         "- Une fondation commune pour penser et construire.",
-        "- arche · themelios",
+        "- Arche · Themelios · Cosmos",
         sep,
         f"{'/ask':<16}explore & reason",
         f"{'/search':<16}retrieve & inspect",
@@ -133,7 +134,7 @@ def build_banner_lines(context: dict) -> list[str]:
         f"{'/help':<16}commands & usage",
         f'{"@\"model\"":<16}switch models LLM ({model})',
         sep,
-        f"{'workspace':<12}connected",
+        f"{'workspace':<12}{_truncate(workspace_value, max(1, width - 12))}",
         f"{'memory':<12}active",
         f"{'mode':<12}{mode}",
         sep,
@@ -143,7 +144,7 @@ def build_banner_lines(context: dict) -> list[str]:
 def _render_compact_line(line: str) -> str:
     if line == "ARKE-AGENT":
         return f"{c('ARKE', CYAN)}-{c('AGENT', BLUE)}"
-    if set(line) == {"-"}:
+    if set(line) in ({"-"}, {"─"}):
         return c(line, GRAY)
     if line.startswith("/"):
         return " ".join(c(token, CYAN) for token in line.split())
@@ -154,7 +155,7 @@ def _render_compact_line(line: str) -> str:
         label, _, value = line.partition(":")
         value_color = YELLOW if label == "mode" else WHITE
         return f"{c(label + ':', GRAY)} {c(value.strip(), value_color)}"
-    if line.startswith("- arche"):
+    if line.lower().startswith("- arche"):
         return c(line, GRAY)
     return c(line, WHITE)
 
@@ -164,11 +165,11 @@ def _render_full_line(index: int, line: str) -> str:
         left = _pad_visual(ARKE_LINES[index], LEFT_TITLE_WIDTH)
         right = _pad_visual(AGENT_LINES[index], RIGHT_TITLE_WIDTH)
         return f"{c(left, CYAN)}{FULL_GAP}{c(right, BLUE)}"
-    if set(line) == {"-"}:
+    if set(line) in ({"-"}, {"─"}):
         return c(line, GRAY)
     if line.startswith("- Une"):
         return c(line, WHITE)
-    if line.startswith("- arche"):
+    if line.lower().startswith("- arche"):
         return c(line, GRAY)
     if line.startswith("/"):
         label = line[:16]

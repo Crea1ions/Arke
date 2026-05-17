@@ -167,6 +167,33 @@ class TestAboutCommand:
         for line in lines:
             assert len(_strip_ansi(line)) <= 74
 
+    def test_about_uses_unicode_horizontal_separators(self):
+        import arke.chat as _chat
+
+        lines = _chat._render_wrapped_markdown_lines(_chat._ABOUT_MARKDOWN, 74)
+        plain = [_strip_ansi(line) for line in lines]
+        assert any(line and set(line) == {"─"} for line in plain)
+
+
+class TestRepositoryPathDisplay:
+    def test_shorten_home_path_uses_tilde(self):
+        import arke.chat as _chat
+
+        shortened = _chat._shorten_home_path("/home/devdipper/dev/APP/003-Agent-Autonome-Arke")
+        assert shortened.startswith("~/")
+
+    def test_compute_content_width_caps_large_terminals(self):
+        import arke.chat as _chat
+
+        width = _chat._compute_content_width(term_columns=240)
+        assert width == 88
+
+    def test_compute_content_width_preserves_small_terminals(self):
+        import arke.chat as _chat
+
+        width = _chat._compute_content_width(term_columns=64)
+        assert width == 64
+
 
 # ---------------------------------------------------------------------------
 # TestModeState — _get_mode / _set_mode module-level state

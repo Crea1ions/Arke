@@ -43,3 +43,15 @@ def test_banner_width_detection(monkeypatch):
     lines = banner.generate_banner(mode="FULL", width=None)
     assert isinstance(lines, list)
     assert lines
+
+
+def test_banner_embeds_workspace_path_in_status_block():
+    lines = banner.generate_banner(workspace="~/dev/Arke-Agent-workspace", mode="FULL", width=100)
+    plain_lines = [strip_ansi(line) for line in lines]
+    assert any("workspace" in line and "~/dev/Arke-Agent-workspace" in line for line in plain_lines)
+
+
+def test_banner_uses_unicode_separator_line():
+    lines = banner.generate_banner(mode="FULL", width=100)
+    plain_lines = [strip_ansi(line) for line in lines]
+    assert any(line and set(line) == {"─"} for line in plain_lines)

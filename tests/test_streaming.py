@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import Mock, patch, MagicMock
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from arke.llm.litellm_manager import LiteLLMManager
 from arke.chat import StreamingMarkdownDisplay, _ask_agent, _strip_internal_markup, _synthesize_tool_results
 from arke.task_graph import StepStatus
+from arke import chat_theme as T
 
 
 class MockStreamingChunk:
@@ -183,6 +185,79 @@ def test_streaming_display_close_safe():
     # Should not raise
     display.close()
     display.close()
+
+
+def test_streaming_display_uses_first_line_prefix():
+    display = StreamingMarkdownDisplay(
+        use_live=False,
+        line_prefix="NEXT ",
+        first_line_prefix="FIRST ",
+    )
+
+    with patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+        display.add_token("one\n")
+        display.add_token("two\n")
+        display.close()
+
+    visible = "".join(call.args[0] for call in mock_write.call_args_list)
+    assert "FIRST one" in visible
+    assert "NEXT two" in visible
+
+
+def test_streaming_display_wraps_with_max_content_width():
+    display = StreamingMarkdownDisplay(
+        use_live=False,
+        line_prefix="P ",
+        max_content_width=10,
+    )
+
+    with patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+        display.add_token("0123456789abcdefghij")
+        display.close()
+
+    visible = "".join(call.args[0] for call in mock_write.call_args_list)
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", visible)
+    lines = [line for line in plain.splitlines() if line]
+    assert len(lines) >= 2
+    for line in lines:
+        assert line.startswith("P ")
+        assert len(line) <= 12
+
+
+def test_theme_block_marker_is_distinct_colorless_text_removed():
+    marker_line = T.step_output("Hello")
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", marker_line)
+    assert plain.startswith("└─ ")
+    assert "Hello" in plain
+
+
+def test_user_icon_uses_warm_block_marker_color():
+    block = T.user_block("hello")
+    assert "◉" in block
+    assert T.BLOCK_MARKER in block
+
+
+def test_agent_theme_hides_model_name_and_icon():
+    prompt = T.prompt_line("flash")
+    header = T.agent_header("flash")
+    footer = T.agent_footer("flash")
+
+    def strip_ansi(text: str) -> str:
+        return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+    prompt_plain = strip_ansi(prompt)
+    header_plain = strip_ansi(header)
+    footer_plain = strip_ansi(footer)
+
+    assert "Arke" in prompt_plain
+    assert "Arke" in header_plain
+    assert "Arke" in footer_plain
+    assert "Flash" not in prompt_plain
+    assert "Flash" not in header_plain
+    assert "Flash" not in footer_plain
+    assert "⚡" not in prompt_plain
+    assert "⚡" not in header_plain
+    assert "⚡" not in footer_plain
 
 
 # ============================================================================

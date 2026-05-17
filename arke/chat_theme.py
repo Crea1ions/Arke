@@ -65,6 +65,7 @@ SUCCESS = _ansi("92")  # bright green
 WARNING = _ansi("93")  # bright yellow
 ERROR   = _ansi("91")  # bright red
 USER_C  = _ansi("37")  # white
+BLOCK_MARKER = _ansi("93")  # warm marker for message starts
 
 # Per-model colors — ANSI 4-bit
 _MODEL_COLOR = {
@@ -106,6 +107,11 @@ def model_label(alias: str) -> str:
     col = model_color(alias)
     icon = model_icon(alias)
     return f"{col}{BOLD}{alias.capitalize()} {icon}{RESET}"
+
+
+def arke_label(alias: str) -> str:
+    """Return colored Arke wordmark using the current model color only."""
+    return f"{model_color(alias)}{BOLD}Arke{RESET}"
 
 
 def fmt_time() -> str:
@@ -188,28 +194,22 @@ def user_block(text: str, width: int = _DEFAULT_WIDTH) -> str:
         │  text
     """
     ts = fmt_time()
-    header = f"{BORDER}├─{RESET} {USER_C}Toi 👤{RESET} {MUTED}· {ts}{RESET}"
-    content = f"{BORDER}│{RESET}  {TEXT}{text}{RESET}"
+    header = f"{BORDER}├─{RESET} {USER_C}Toi {BLOCK_MARKER}◉{RESET} {MUTED}· {ts}{RESET}"
+    content = f"{BORDER}{BLOCK_MARKER}└─{RESET} {TEXT}{text}{RESET}"
     return f"{BORDER}│{RESET}\n{header}\n{content}"
 
 
 def agent_header(alias: str, width: int = _DEFAULT_WIDTH) -> str:
-    """Render ``├─ Arke · Flash ⚡ · HH:MM`` header line."""
+    """Render a colored Arke header line."""
     ts = fmt_time()
-    mlabel = model_label(alias)
     return (f"{BORDER}│{RESET}\n"
-            f"{BORDER}├─{RESET} {ACCENT}{BOLD}Arke{RESET} "
-            f"{MUTED}·{RESET} {mlabel} "
-            f"{MUTED}· {ts}{RESET}")
+            f"{BORDER}├─{RESET} {arke_label(alias)} {MUTED}· {ts}{RESET}")
 
 
 def agent_footer(alias: str) -> str:
-    """Return ``└─ Arke · Flash ⚡ · HH:MM`` closing line."""
+    """Return a colored Arke closing line."""
     ts = fmt_time()
-    mlabel = model_label(alias)
-    return (f"{BORDER}└─{RESET} {ACCENT}{BOLD}Arke{RESET} "
-            f"{MUTED}·{RESET} {mlabel} "
-            f"{MUTED}· {ts}{RESET}")
+    return f"{BORDER}└─{RESET} {arke_label(alias)} {MUTED}· {ts}{RESET}"
 
 
 def step_line(tool: str, detail: str, prefix: str = "⠋") -> str:
@@ -234,8 +234,8 @@ def step_meta(kind: str, detail: str) -> str:
 
 
 def step_output(line: str) -> str:
-    """``│      line`` indented output line."""
-    return f"{BORDER}│{RESET}      {TEXT}{line}{RESET}"
+    """``└─ line`` indented output line."""
+    return f"{BORDER}{BLOCK_MARKER}└─{RESET} {TEXT}{line}{RESET}"
 
 
 def done_line(tokens: int, elapsed: float, cost: float) -> str:
@@ -270,14 +270,13 @@ def warning() -> str:
 
 def llm_output_line(line: str) -> str:
     """LLM response line with left thread bar."""
-    return f"{BORDER}│{RESET}  {TEXT}{line}{RESET}"
+    return f"{BORDER}{BLOCK_MARKER}└─{RESET} {TEXT}{line}{RESET}"
 
 
 def prompt_line(alias: str) -> str:
-    """Return the prompt string: ``Arke (Flash ⚡) · HH:MM\n› ``"""
+    """Return the prompt string: ``Arke · HH:MM\n› ``"""
     ts = fmt_time()
-    mlabel = model_label(alias)
-    return f"\n{ACCENT}{BOLD}Arke{RESET} {MUTED}({RESET}{mlabel}{MUTED}) · {ts}{RESET}\n{ACCENT}›{RESET} "
+    return f"\n{arke_label(alias)} {MUTED}· {ts}{RESET}\n{ACCENT}›{RESET} "
 
 
 # ---------------------------------------------------------------------------
