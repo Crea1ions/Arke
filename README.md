@@ -69,6 +69,7 @@ Only memory accumulation over time.
 | **OpenTelemetry Integration**  | Full tracing of execution and cost                             |
 | **Terminal REPL**              | Natural language command interface with mode badge             |
 | **Telegram Interface**         | Optional transport layer (no business logic)                   |
+| **External Bridges (optional)** | Complementary connectors outside Arke core                     |
 
 ---
 
@@ -270,6 +271,22 @@ It never participates in decision-making.
 * Regressions: 0
 * Suite runtime: ~12.6s
 * Router latency: < 0.002 ms
+
+### Optional Complementary Extension
+
+Arke can expose optional local bridges for external tools.
+These bridges are complementary extensions and are not part of Arke's core architecture or identity.
+Arke remains fully operational as a standalone local-first agent without them.
+
+- **MyTeamHub** is a cognitive IDE built on three principles:
+  - **Files-first** — every interaction is anchored to a file open in the editor. No floating context.
+  - **Agent roundtable** — specialized agents (Explorer, Critical Analyst, Collaborator, Synthesizer) each bring a distinct perspective to the same shared context.
+  - **User as Game Master** — the user controls what context is shared, which agent speaks, and when. Agents suggest, never decide.
+
+  When connected to Arke via a local bridge, MyTeamHub becomes a complementary interface where:
+  - Arke joins the agent roundtable as an invited participant, keeping its full REPL capabilities (/ask, /search, /plan, /agent).
+  - Context sharing is strictly opt-in via an editor toggle (OFF by default).
+  - Sessions and memory remain isolated from MyTeamHub's other agents — Arke sees only what the user explicitly shares.
 
 ### CLI safety notes
 

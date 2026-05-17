@@ -116,6 +116,18 @@ def chat_cmd() -> None:
     start()
 
 
+@app.command("myteam-api")
+def myteam_api_cmd(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host for MyTeam gateway API."),
+    port: int = typer.Option(4777, "--port", help="Bind port for MyTeam gateway API."),
+) -> None:
+    """Run local HTTP gateway for MyTeamHub integration."""
+    from arke.interfaces.myteam_api import serve
+
+    typer.echo(f"Starting Arke MyTeam API on http://{host}:{port}")
+    serve(host=host, port=port)
+
+
 @app.command()
 def run(
     intention: str = typer.Argument(..., help="Natural-language intention to execute."),

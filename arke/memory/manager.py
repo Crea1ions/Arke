@@ -41,6 +41,7 @@ _DB_TABLE_PREFIXES: dict[str, list[str]] = {
 
 
 def _load_db_paths() -> dict[str, Path]:
+    session_override = os.environ.get("ARKE_SESSION_DB_PATH")
     workspace_root = os.environ.get("WORKSPACE_ROOT")
     if workspace_root:
         root = Path(workspace_root).expanduser().resolve()
@@ -59,10 +60,14 @@ def _load_db_paths() -> dict[str, Path]:
                         return path
                     return root / path
 
+                session_path = _resolve(mem.get("session_path", f".arke/sessions/{default_session_name}"))
+                if session_override:
+                    session_path = Path(session_override).expanduser().resolve()
+
                 return {
                     "global": _resolve(mem.get("global_path", ".arke/memory/global.db")),
                     "project": _resolve(mem.get("project_path", ".arke/memory/project.db")),
-                    "session": _resolve(mem.get("session_path", f".arke/sessions/{default_session_name}")),
+                    "session": session_path,
                     "cache": _resolve(mem.get("cache_path", ".arke/memory/cache.db")),
                 }
             except Exception:  # noqa: BLE001
@@ -73,18 +78,24 @@ def _load_db_paths() -> dict[str, Path]:
         with open(config_path, "rb") as fh:
             data = tomllib.load(fh)
         mem = data.get("memory", {})
+        session_path = _BASE_DIR / mem.get("session_path", "memory/session.db")
+        if session_override:
+            session_path = Path(session_override).expanduser().resolve()
         return {
             "global": _BASE_DIR / mem.get("global_path", "memory/global.db"),
             "project": _BASE_DIR / mem.get("project_path", "memory/project.db"),
-            "session": _BASE_DIR / mem.get("session_path", "memory/session.db"),
+            "session": session_path,
             "cache": _BASE_DIR / mem.get("cache_path", "memory/cache.db"),
         }
     except FileNotFoundError:
         # Fallback defaults
+        session_path = _BASE_DIR / "memory" / "session.db"
+        if session_override:
+            session_path = Path(session_override).expanduser().resolve()
         return {
             "global": _BASE_DIR / "memory" / "global.db",
             "project": _BASE_DIR / "memory" / "project.db",
-            "session": _BASE_DIR / "memory" / "session.db",
+            "session": session_path,
             "cache": _BASE_DIR / "memory" / "cache.db",
         }
 
