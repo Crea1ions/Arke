@@ -75,6 +75,7 @@ from arke.rendering.input_normalizer import InputNormalizer  # noqa: E402
 
 _ARKE_ENV_PATH = Path.home() / ".arke" / ".env"
 _CAPABILITY_REFERENCE_PATH = "memory/mcp_reference.md"
+_THEMELIOS_TOKEN_LIMIT = 3000
 
 
 def _shorten_home_path(raw_path: str) -> str:
@@ -86,6 +87,42 @@ def _shorten_home_path(raw_path: str) -> str:
     except ValueError:
         return str(resolved)
     return f"~/{relative.as_posix()}"
+
+
+def _stream_with_themelios_guard(
+    manager,
+    *,
+    prompt: str,
+    task_type: str,
+    max_tokens: int,
+    stream_callback=None,
+    source: str,
+) -> str:
+    """Stream tokens while enforcing the global Themelios response guard."""
+    response_text = ""
+    token_count = 0
+    limit_reached = False
+
+    for token in manager.stream_complete(prompt=prompt, task_type=task_type, max_tokens=max_tokens):
+        response_text += token
+        token_count += len(re.findall(r"\S+", token))
+        if stream_callback:
+            stream_callback(token)
+
+        if limit_reached:
+            if token.endswith((".", "!", "?", "\n")):
+                directive = "\n[SYSTEM: Limite de réponse atteinte. Conclus en une phrase.]"
+                response_text += directive
+                if stream_callback:
+                    stream_callback(directive)
+                log.info("themelios.limit_reached", source=source, tokens=token_count)
+                break
+            continue
+
+        if token_count >= _THEMELIOS_TOKEN_LIMIT:
+            limit_reached = True
+
+    return response_text
 
 _ABOUT_MARKDOWN = """# À propos d'Arke
 
@@ -1107,13 +1144,14 @@ def _synthesize_tool_results(
     manager = LiteLLMManager()
     try:
         if stream_callback:
-            response_text = ""
-            for token in manager.stream_complete(
-                prompt=synthesis_prompt, task_type="reasoning", max_tokens=1024
-            ):
-                response_text += token
-                stream_callback(token)
-            return response_text
+            return _stream_with_themelios_guard(
+                manager,
+                prompt=synthesis_prompt,
+                task_type="reasoning",
+                max_tokens=1024,
+                stream_callback=stream_callback,
+                source="synthesis",
+            )
         else:
             response_text, _cost, _tokens = manager.complete(
                 prompt=synthesis_prompt, task_type="reasoning", max_tokens=1024
@@ -1308,13 +1346,14 @@ Ne combine pas les commandes CLI avec && ou |. Chaque étape = un outil indépen
     try:
         if stream_display_callback:
             # Stream mode: accumulate tokens via callback
-            response_text = ""
-            for token in manager.stream_complete(
-                prompt=prompt, task_type="classification", max_tokens=16384
-            ):
-                response_text += token
-                if stream_display_callback:
-                    stream_display_callback(token)
+            response_text = _stream_with_themelios_guard(
+                manager,
+                prompt=prompt,
+                task_type="classification",
+                max_tokens=16384,
+                stream_callback=stream_display_callback,
+                source="agent_decision",
+            )
         else:
             # Non-streaming mode (original behavior)
             response_text, _cost, _tokens = manager.complete(

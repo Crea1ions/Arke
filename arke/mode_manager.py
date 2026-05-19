@@ -59,14 +59,16 @@ def is_valid_mode(mode: str) -> bool:
 
 #: Tools permitted per mode. ``None`` means unrestricted (agent mode).
 MODE_PERMISSIONS: dict[str, frozenset[str] | None] = {
-    "ask":    frozenset(),  # aucun outil
+    "ask":    frozenset({
+        "fs", "memory_fts", "memory_read", "memory_search",
+    }),
     "search": frozenset({
         "fs", "sqlite", "memory_fts", "memory_read", "memory_search",
         "vector_search", "web_search", "rss_reader", "calculator", "mcp",
     }),
     "plan":   frozenset({
-        "fs", "sqlite", "memory_fts", "memory_read", "memory_search",
-        "memory_write", "memory_forget", "vector_search",
+        "fs", "memory_fts", "memory_read", "memory_search",
+        "vector_search",
     }),
     "agent":  None,  # accès complet
 }
@@ -154,6 +156,27 @@ def build_input_context(
     }
     if workspace_root:
         context["runtime"]["WORKSPACE_ROOT"] = workspace_root
+
+    context["priority_context_header"] = {
+        "label": "CONTEXTE PRIORITAIRE",
+        "scope": "Dernier échange et cadre de réponse courant",
+        "instruction": (
+            "Ce bloc prime sur les messages bruts. Il sert à préserver le lien "
+            "entre la question actuelle et la réflexion précédente."
+        ),
+    }
+
+    context["available_modes"] = {
+        "ask": "Raisonnement, explication, analyse. Lecture mémoire et contexte.",
+        "search": "Exploration lecture seule. Accès fs, SQLite, MCP search.",
+        "plan": "Planification structurée. Lecture seule. Aucun outil d'écriture.",
+        "agent": "Exécution technique complète. Tous outils disponibles.",
+    }
+
+    context["relay_instruction"] = (
+        "Si la demande sort de ton périmètre actuel, réponds dans ton périmètre "
+        "et indique le mode adapté à l'utilisateur."
+    )
 
     # Fusionner avec le schéma du mode (le schéma enrichit le contexte)
     if schema:
