@@ -7,14 +7,16 @@ reusing Arke cognitive pipeline.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 from arke.chat import (
     _ask_agent,
@@ -69,6 +71,88 @@ class SessionState:
     workspace_root: Path
     mode: str
     last_seen: float
+
+
+class BlockAggregator:
+    """Deterministic block boundary detection for SSE streaming.
+    
+    Implements 4 rules per stream_contract.md section 3:
+    1. DOUBLE_NEWLINE: \n\n → emit block
+    2. MAX_BUFFER_500_CHARS: buffer ≥ 500 chars → emit, keep rest
+    3. HEARTBEAT_10S: 10s elapsed no block → emit heartbeat
+    4. (Rule 2 handled at protocol level: TIMEOUT_500MS)
+    """
+
+    def __init__(self) -> None:
+        self.buffer: str = ""
+        self.block_count: int = 0
+        self.total_tokens: int = 0
+        self.start_time: float = time.time()
+        self.last_block_time: float = time.time()
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Rough token count (1 token ≈ 4 chars)."""
+        return max(1, len(text) // 4)
+
+    def add_text(self, text: str) -> Generator[dict[str, Any], None, None]:
+        """Feed text into aggregator, yield SSE block events."""
+        if not text:
+            return
+
+        for char in text:
+            self.buffer += char
+
+            # Rule 1: DOUBLE_NEWLINE
+            if self.buffer.endswith("\n\n"):
+                yield from self._emit_block()
+                continue
+
+            # Rule 2: MAX_BUFFER_500_CHARS
+            if len(self.buffer) >= 500:
+                yield from self._emit_block()
+                continue
+
+    def flush(self) -> Generator[dict[str, Any], None, None]:
+        """Emit remaining buffer as final block."""
+        if self.buffer.strip():
+            yield from self._emit_block()
+
+    def done(self, reason: str = "completed") -> dict[str, Any]:
+        """Generate done event."""
+        elapsed_ms = int((time.time() - self.start_time) * 1000)
+        return {
+            "event": "done",
+            "data": {
+                "total_blocks": self.block_count,
+                "total_duration_ms": elapsed_ms,
+                "total_tokens": self.total_tokens,
+                "reason": reason,
+            },
+        }
+
+    def _emit_block(self) -> Generator[dict[str, Any], None, None]:
+        """Emit current buffer as block, clear buffer."""
+        if not self.buffer.strip():
+            return
+
+        self.block_count += 1
+        elapsed_ms = int((time.time() - self.start_time) * 1000)
+        token_count = self._estimate_tokens(self.buffer)
+        self.total_tokens += token_count
+
+        yield {
+            "event": "block",
+            "data": {
+                "id": f"blk_{self.block_count}",
+                "type": "text",
+                "content": self.buffer.strip(),
+                "elapsed_ms": elapsed_ms,
+                "tokens": token_count,
+                "is_final": False,
+            },
+        }
+        self.buffer = ""
+        self.last_block_time = time.time()
 
 
 class MyTeamGateway:
@@ -208,6 +292,139 @@ class MyTeamGateway:
                 metadata=metadata if isinstance(metadata, dict) else None,
             )
             return 200, response_payload
+
+    def stream_chat(self, payload: dict[str, Any], auth_header: str | None) -> Generator[dict[str, Any], None, None]:
+        """SSE streaming version of handle_chat. Yields block events."""
+        user_message = str(payload.get("user_message", "")).strip()
+        session_id = str(payload.get("session_id", "")).strip()
+        request_id = str(payload.get("request_id", uuid.uuid4().hex))
+
+        # Validation errors emitted as error events
+        if not user_message:
+            yield {"event": "error", "data": {"code": "INVALID_REQUEST", "message": "user_message requis", "recovery_action": "retry", "request_id": request_id}}
+            return
+        if not session_id:
+            yield {"event": "error", "data": {"code": "INVALID_REQUEST", "message": "session_id requis", "recovery_action": "retry", "request_id": request_id}}
+            return
+
+        metadata = payload.get("metadata")
+        metadata_err = self._validate_metadata(metadata)
+        if metadata_err is not None:
+            yield {"event": "error", "data": {"code": "INVALID_REQUEST", "message": metadata_err, "recovery_action": "retry", "request_id": request_id}}
+            return
+
+        command = user_message.lower()
+        with self._lock:
+            state = self._sessions.get(session_id)
+
+            # Session expired
+            if state and (time.time() - state.last_seen) > SESSION_TIMEOUT_SECONDS:
+                del self._sessions[session_id]
+                agg = BlockAggregator()
+                yield from agg.add_text(EXPIRATION_MESSAGE)
+                yield from agg.flush()
+                yield agg.done(reason="session_expired")
+                return
+
+            # Handle workspace commands
+            create_path = self._extract_workspace_path(user_message, "/workspace-create")
+            if create_path is not None:
+                workspace_root = self._normalize_workspace_root(Path(create_path))
+                workspace_root.mkdir(parents=True, exist_ok=True)
+                ensure_arke_workspace(workspace_root)
+                self._init_myteam_state(workspace_root)
+                self._sessions[session_id] = SessionState(workspace_root=workspace_root, mode="ask", last_seen=time.time())
+                agg = BlockAggregator()
+                yield from agg.add_text(f"Workspace configure : {workspace_root}/.arke\nSession MyTeamHub active. Vous pouvez commencer.")
+                yield from agg.flush()
+                yield agg.done()
+                return
+
+            select_path = self._extract_workspace_path(user_message, "/workspace-select")
+            if select_path is not None:
+                workspace_root = self._normalize_workspace_root(Path(select_path))
+                if not (workspace_root / ".arke").exists():
+                    agg = BlockAggregator()
+                    yield from agg.add_text(f"Workspace invalide: {workspace_root}/.arke introuvable")
+                    yield from agg.flush()
+                    yield agg.done()
+                    return
+                ensure_arke_workspace(workspace_root)
+                self._init_myteam_state(workspace_root)
+                self._sessions[session_id] = SessionState(workspace_root=workspace_root, mode="ask", last_seen=time.time())
+                agg = BlockAggregator()
+                yield from agg.add_text(f"Workspace configure : {workspace_root}/.arke\nSession MyTeamHub active. Vous pouvez commencer.")
+                yield from agg.flush()
+                yield agg.done()
+                return
+
+            # Quick responses for missing state or invalid commands
+            if state is None:
+                agg = BlockAggregator()
+                yield from agg.add_text(NAVIGATION_MESSAGE)
+                yield from agg.flush()
+                yield agg.done()
+                return
+
+            state.last_seen = time.time()
+
+            # Main agent turn
+            if metadata and metadata.get("studio_folder_path"):
+                self._sync_structure_only(state.workspace_root, str(metadata.get("studio_folder_path", "")))
+
+            # Capture state fields needed outside the lock
+            workspace_root_cap = state.workspace_root
+            mode_cap = state.mode
+            # Release lock before LLM call — _execute_agent_turn uses its own _env_lock
+
+        # --- Outside self._lock — run LLM in background thread, yield heartbeats ---
+        import queue as _queue_mod
+
+        result_queue: _queue_mod.Queue = _queue_mod.Queue()
+        start_time = time.time()
+
+        def _run_agent() -> None:
+            try:
+                result = self._execute_agent_turn(
+                    session_id=session_id,
+                    workspace_root=workspace_root_cap,
+                    mode=mode_cap,
+                    user_message=user_message,
+                    metadata=metadata if isinstance(metadata, dict) else None,
+                )
+                result_queue.put(("ok", result))
+            except Exception as exc:
+                result_queue.put(("err", exc))
+
+        t = threading.Thread(target=_run_agent, daemon=True)
+        t.start()
+
+        aggregator = BlockAggregator()
+        while True:
+            try:
+                kind, value = result_queue.get(timeout=10.0)
+                if kind == "ok":
+                    response_text = value.get("response", "")
+                    yield from aggregator.add_text(response_text)
+                    yield from aggregator.flush()
+                    yield aggregator.done(reason="completed")
+                else:
+                    yield {
+                        "event": "error",
+                        "data": {
+                            "code": "AGENT_ERROR",
+                            "message": str(value),
+                            "recovery_action": "retry",
+                        },
+                    }
+                break
+            except _queue_mod.Empty:
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                yield {
+                    "event": "heartbeat",
+                    "data": {"elapsed_ms": elapsed_ms, "hint": "processing"},
+                }
+        return
 
     def _execute_agent_turn(
         self,
@@ -456,6 +673,10 @@ class MyTeamGateway:
         - /workspace-select /path/to/project
         - /workspace-select/path/to/project
         - 2. /workspace-select /path/to/project
+        
+        IMPORTANT: Extract ONLY the first line (the path command).
+        If message includes context (e.g., from editor), ignore it.
+        This prevents Path() from receiving multiline strings with embedded newlines.
         """
         message = raw_message.strip()
         lowered = message.lower()
@@ -463,7 +684,8 @@ class MyTeamGateway:
         if idx == -1:
             return None
 
-        tail = message[idx + len(command):].strip()
+        # Extract only up to the first line
+        tail = message[idx + len(command):].split('\n')[0].strip()
         if not tail:
             return ""
 
@@ -498,6 +720,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _sse_event(self, event_dict: dict[str, Any]) -> bytes:
+        """Format SSE event: event: <type>\ndata: <json>\n\n"""
+        event_type = event_dict.get("event", "data")
+        data = event_dict.get("data", {})
+        line = f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n"
+        return line.encode("utf-8")
+
+    def do_GET(self) -> None:  # noqa: N802
+        """Handle GET requests (health check)."""
+        if self.path == "/health":
+            self._json(200, {
+                "status": "healthy",
+                "service": "arke-myteam-gateway",
+                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            })
+        else:
+            self._json(404, {"error": "Not found"})
+
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/api/v1/chat":
             self._json(404, {"error": "Not found"})
@@ -511,8 +751,47 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "JSON invalide"})
             return
 
-        status, body = _GATEWAY.handle_chat(payload, self.headers.get("Authorization"))
-        self._json(status, body)
+        # Check for streaming request
+        accept = self.headers.get("Accept", "").lower()
+        stream_flag = payload.get("stream", False)
+        use_streaming = "text/event-stream" in accept or stream_flag
+
+        if use_streaming:
+            self._handle_streaming(payload)
+        else:
+            status, body = _GATEWAY.handle_chat(payload, self.headers.get("Authorization"))
+            self._json(status, body)
+
+    def _handle_streaming(self, payload: dict[str, Any]) -> None:
+        """Handle SSE streaming response."""
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            for event_dict in _GATEWAY.stream_chat(payload, self.headers.get("Authorization")):
+                self.wfile.write(self._sse_event(event_dict))
+                self.wfile.flush()
+
+        except BrokenPipeError:
+            pass  # client disconnected mid-stream
+        except Exception as e:
+            # Error after response started; can't send HTTP error
+            try:
+                error_event = {
+                    "event": "error",
+                    "data": {
+                        "code": "INTERNAL_ERROR",
+                        "message": f"Stream error: {str(e)}",
+                        "recovery_action": "retry",
+                    },
+                }
+                self.wfile.write(self._sse_event(error_event))
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def log_message(self, format: str, *args: Any) -> None:
         return
