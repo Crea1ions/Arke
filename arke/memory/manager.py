@@ -169,6 +169,9 @@ class MemoryManager:
             # Run only the relevant schema sections
             self._init_schema(conn, db)
             conn.commit()
+            # Validate that critical tables exist for global.db
+            if db == "global":
+                self._validate_schema(conn)
 
         # One-time FTS5 rebuild for session.db to populate existing chat_history rows
         if db == "session":
@@ -185,6 +188,20 @@ class MemoryManager:
                 conn.commit()
 
         log.info("memory.bootstrap", db=db, path=str(path))
+
+    def _validate_schema(self, conn: sqlite3.Connection) -> None:
+        """Validate that critical tables exist for global.db."""
+        critical_tables = ["cognitive_threads", "interaction_density", "initiative_log"]
+        for table in critical_tables:
+            try:
+                conn.execute(f"SELECT 1 FROM {table} LIMIT 1")
+            except sqlite3.OperationalError as e:
+                log.error(
+                    "memory.schema_validation_failed",
+                    table=table,
+                    error=str(e)
+                )
+                raise  # Fail fast: missing table is a critical error
 
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         """Idempotent ALTER TABLE migrations for global.db.

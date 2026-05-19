@@ -161,7 +161,7 @@ def _extraction_worker(
         _store_threads(mm, session_id, threads, user_msg, agent_response)
 
     except Exception as exc:  # noqa: BLE001 — never interrupt the REPL
-        log.debug("thread_extractor.error", error=str(exc))
+        log.warning("thread_extractor.error", error=str(exc), exc_type=type(exc).__name__)
 
 
 def _parse_threads(raw: str) -> list[dict]:
@@ -218,4 +218,4 @@ def _store_threads(
                     preview=t["content"][:60],
                 )
             except Exception as exc:  # noqa: BLE001
-                log.debug("thread_extractor.store_error", error=str(exc))
+                log.warning("thread_extractor.store_error", error=str(exc), exc_type=type(exc).__name__)

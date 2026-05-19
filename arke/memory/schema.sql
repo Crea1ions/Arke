@@ -111,6 +111,44 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
 );
 
 -- ============================================================
+-- Cognitive Continuity — Memory threads (S023–S028)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cognitive_threads (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    content TEXT NOT NULL,
+    summary TEXT,
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_activated_at TIMESTAMP,
+    activation_count INTEGER DEFAULT 0,
+    importance_score REAL DEFAULT 0.5,
+    reactivation_score REAL DEFAULT 0,
+    density_context REAL,
+    tags TEXT,
+    source_exchange_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS interaction_density (
+    id TEXT PRIMARY KEY,
+    day TEXT UNIQUE,
+    exchange_count INTEGER DEFAULT 0,
+    avg_depth_score REAL DEFAULT 0.0,
+    session_id TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS initiative_log (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    type TEXT DEFAULT 'soft_reactivation',
+    density_snapshot REAL,
+    context_anchor TEXT,
+    accepted INTEGER DEFAULT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
 -- FTS5 Triggers — synchronisation automatique chat_history → memory_fts
 -- Chaque INSERT/DELETE dans chat_history met à jour l'index FTS5.
 -- Source : recommandation communauté SQLite (Option B)
