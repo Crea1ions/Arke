@@ -1485,6 +1485,19 @@ def start() -> None:
     _last_cig = [None, ""]  # type: list  # [log_id: str|None, initiative_text: str]
     _set_mode("ask")  # Always start fresh in ask mode
 
+    # Load persistent initiative user preference
+    try:
+        _rows = mm.query(
+            "session",
+            "SELECT value FROM session_context WHERE key = 'initiative_user_enabled'",
+            (),
+        )
+        _initiative_user_enabled = [(_rows[0]["value"] != "false") if _rows else True]
+    except Exception:  # noqa: BLE001
+        _initiative_user_enabled = [True]
+    if not _initiative_user_enabled[0]:
+        _social_orchestrator.disable()
+
     # Initialize workspace cache (WVS)
     try:
         import tomllib
@@ -2019,6 +2032,40 @@ def start() -> None:
                 _social_orchestrator.pause(hours)
                 print(f"{T.MUTED}Initiatives suspendues pour {hours:.0f}h.{T.RESET}")
 
+            elif cmd == "/initiative":
+                parts = raw.split()
+                arg = parts[1].lower() if len(parts) > 1 else ""
+                if arg == "on":
+                    _initiative_user_enabled[0] = True
+                    try:
+                        mm.query(
+                            "session",
+                            "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
+                            ("initiative_user_enabled", "true"),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if _get_mode() == "ask":
+                        _social_orchestrator.enable()
+                    print(f"{T.MUTED}Initiatives activées (persistant).{T.RESET}")
+                elif arg == "off":
+                    _initiative_user_enabled[0] = False
+                    try:
+                        mm.query(
+                            "session",
+                            "INSERT OR REPLACE INTO session_context (key, value) VALUES (?, ?)",
+                            ("initiative_user_enabled", "false"),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _social_orchestrator.disable()
+                    print(f"{T.MUTED}Initiatives désactivées (persistant).{T.RESET}")
+                else:
+                    state = "activées" if _initiative_user_enabled[0] else "désactivées"
+                    active = "active" if _social_orchestrator._enabled else "en veille"
+                    print(f"{T.MUTED}Initiatives : {state} — orchestrateur {active}.{T.RESET}")
+                    print(f"{T.MUTED}Usage : /initiative on | /initiative off{T.RESET}")
+
             elif cmd == "/resume-initiatives":
                 _social_orchestrator.resume()
                 print(f"{T.MUTED}Initiatives réactivées.{T.RESET}")
@@ -2035,6 +2082,8 @@ def start() -> None:
                 except Exception:
                     pass
                 print(f"{T.MUTED}[ask] Mode analyse actif — aucun outil.{T.RESET}")
+                if _initiative_user_enabled[0]:
+                    _social_orchestrator.enable()
 
             elif cmd == "/search":
                 _set_mode("search")
@@ -2047,6 +2096,7 @@ def start() -> None:
                 except Exception:
                     pass
                 print(f"{T.MUTED}[search] Lecture seule (SQLite, FTS, MCP search).{T.RESET}")
+                _social_orchestrator.disable()
 
             elif cmd == "/plan":
                 _set_mode("plan")
@@ -2059,6 +2109,7 @@ def start() -> None:
                 except Exception:
                     pass
                 print(f"{T.MUTED}[plan] Mémoire session autorisée, aucune exécution système.{T.RESET}")
+                _social_orchestrator.disable()
 
             elif cmd == "/agent":
                 _set_mode("agent")
@@ -2071,6 +2122,7 @@ def start() -> None:
                 except Exception:
                     pass
                 print(f"{T.WARNING}⚠ [agent] Mode exécution actif — outils système disponibles.{T.RESET}")
+                _social_orchestrator.disable()
 
             else:
                 print(f"{T.MUTED}Commande inconnue : {cmd}. Tapez /help pour la liste.{T.RESET}")

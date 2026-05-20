@@ -54,6 +54,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/drop-thread":        "Abandonne un fil cognitif (/drop-thread <id>)",
     "/pause-initiatives":  "Suspend les initiatives cognitive (/pause-initiatives [heures])",
     "/resume-initiatives": "Réactive les initiatives cognitives",
+    "/initiative":         "Active/désactive les initiatives (/initiative on|off) — persistant",
     # Agent mode commands — control tool access
     "/ask":    "Mode analyse — aucun outil (défaut, le plus sûr)",
     "/search": "Mode recherche — lecture seule (SQLite, FTS, MCP)",

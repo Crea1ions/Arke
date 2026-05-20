@@ -151,10 +151,14 @@ class SocialOrchestrator:
         """Return True if an initiative is queued (always False in Phase 0)."""
         if self._observation_mode:
             return False
+        if not self._enabled:
+            return False
         return self._pending_initiative is not None
 
     def pop_initiative(self) -> Optional[str]:
         """Consume and return the queued initiative text (None in Phase 0)."""
+        if not self._enabled:
+            return None
         text = self._pending_initiative
         thread_id = self._pending_thread_id
         self._pending_initiative = None
@@ -452,6 +456,20 @@ class SocialOrchestrator:
         self._stopped.clear()
         self._schedule_next()
         log.info("social_orchestrator.resumed")
+
+    def disable(self) -> None:
+        """Disable initiatives immediately (mode-driven, no duration)."""
+        if self._timer is not None:
+            self._timer.cancel()
+        self._enabled = False
+        log.info("social_orchestrator.disabled")
+
+    def enable(self) -> None:
+        """Enable initiatives (mode-driven, used when entering /ask)."""
+        self._enabled = True
+        self._stopped.clear()
+        self._schedule_next()
+        log.info("social_orchestrator.enabled")
 
     def list_threads(self) -> list[dict]:
         """Return active threads for /threads command."""
