@@ -101,3 +101,38 @@ def pytest_terminal_summary(
 def arke_metrics(pytestconfig: pytest.Config) -> _MetricsCollector:
     """Return the session-scoped metrics collector."""
     return pytestconfig._arke_metrics  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# CIG test fixture — disable divergence for deterministic tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def mock_cig_config_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auto-mock CIG config to disable divergence (divergence_rate=0.0).
+    
+    This makes CIG tests deterministic by disabling the probabilistic
+    divergence reactivation path. Tests can override this by explicitly
+    setting divergence_rate in their fixtures.
+    """
+    from arke import cognitive_initiative_gate
+    
+    # Reset the module-level config cache so it reloads next time
+    cognitive_initiative_gate._cfg = None
+    
+    # Mock the _get_config() to return a config with divergence_rate=0.0
+    original_load_config = cognitive_initiative_gate._load_config
+    
+    def mock_load_config_with_zero_divergence() -> dict:
+        cfg = original_load_config()
+        # Force divergence_rate to 0.0 for deterministic tests
+        cfg["divergence_rate"] = 0.0
+        return cfg
+    
+    monkeypatch.setattr(
+        cognitive_initiative_gate,
+        "_load_config",
+        mock_load_config_with_zero_divergence,
+    )
+

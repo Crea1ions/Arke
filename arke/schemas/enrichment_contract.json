@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Archè Enrichment Contract",
+  "version": "1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "formulation_context": {
+      "type": "string",
+      "description": "Contexte justifiant la formulation (p. ex. 'Suite à question sur Platon')"
+    },
+    "formulation_tone": {
+      "type": "string",
+      "enum": ["neutral", "curiosité", "prudence"],
+      "description": "Ton ÉDITORIAL de formulation — choix d'Archè, pas propriété du thread"
+    },
+    "formulation_tone_source": {
+      "type": "string",
+      "description": "Justification du tone (p. ex. 'Tags: philosophie + age thread > 20d')"
+    }
+  },
+  "invariants": [
+    "Archè n'invente jamais un champ absent du contrat Themelios",
+    "Archè n'utilise JAMAIS formulation_tone hors enum",
+    "Archè ne modifie JAMAIS les champs bruts Themelios",
+    "formulation_tone_source est OBLIGATOIRE si formulation_tone est présent",
+    "Si formulation_tone absent → utiliser 'neutral' par défaut (pas d'enrichissement tone)"
+  ]
+}

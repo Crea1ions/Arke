@@ -107,3 +107,193 @@ def test_extract_async_cancels_before_llm():
         thread.join(timeout=CANCEL_GRACE_SECONDS + 2)
 
         mock_llm.complete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# v1.1 Tests: Hierarchy, relations, scores, tags, confidence
+# ---------------------------------------------------------------------------
+
+
+def test_parse_threads_v11_full_fields():
+    """Test parsing v1.1 JSON with all new fields."""
+    raw = json.dumps(
+        [
+            {
+                "content": "Main idea",
+                "importance_score": 0.8,
+                "depth_score": 0.7,
+                "relevance_score": 0.9,
+                "thread_type": "primary",
+                "tags": ["philosophie", "question"],
+                "related_thread_index": None,
+                "relation_type": None,
+                "relation_evidence": None,
+                "extraction_confidence": 0.85,
+            }
+        ]
+    )
+    result = _parse_threads(raw)
+    assert len(result) == 1
+    t = result[0]
+    assert t["content"] == "Main idea"
+    assert t["importance_score"] == 0.8
+    assert t["depth_score"] == 0.7
+    assert t["relevance_score"] == 0.9
+    assert t["thread_type"] == "primary"
+    assert "philosophie" in t["tags"]
+    assert t["extraction_confidence"] == 0.85
+
+
+def test_parse_threads_v11_invalid_thread_type():
+    """Invalid thread_type → defaults to 'primary'."""
+    raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "thread_type": "invalid_type",
+            }
+        ]
+    )
+    result = _parse_threads(raw)
+    assert result[0]["thread_type"] == "primary"
+
+
+def test_parse_threads_v11_invalid_tags_filtered():
+    """Invalid tags not in taxonomy → filtered out."""
+    raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "tags": ["philosophie", "invalid_tag", "science"],
+            }
+        ]
+    )
+    result = _parse_threads(raw)
+    tags = json.loads(result[0]["tags"])
+    assert "philosophie" in tags
+    assert "science" in tags
+    assert "invalid_tag" not in tags
+
+
+def test_parse_threads_v11_relation_validation():
+    """Valid relation_type → accepted; invalid → null."""
+    valid_raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "relation_type": "elaboration",
+                "related_thread_index": 0,
+            }
+        ]
+    )
+    result = _parse_threads(valid_raw)
+    assert result[0]["relation_type"] == "elaboration"
+
+    invalid_raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "relation_type": "invalid_relation",
+            }
+        ]
+    )
+    result = _parse_threads(invalid_raw)
+    assert result[0]["relation_type"] is None
+
+
+def test_parse_threads_v11_related_index_integer():
+    """related_thread_index must be integer or null."""
+    raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "related_thread_index": 1,
+            }
+        ]
+    )
+    result = _parse_threads(raw)
+    assert result[0]["related_thread_index"] == 1
+
+    # Invalid index (string) → null
+    invalid_raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "related_thread_index": "not_an_int",
+            }
+        ]
+    )
+    result = _parse_threads(invalid_raw)
+    assert result[0]["related_thread_index"] is None
+
+
+def test_parse_threads_v11_scores_clamped():
+    """All scores clamped to [0, 1]."""
+    raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 1.5,
+                "depth_score": -0.2,
+                "relevance_score": 2.0,
+                "extraction_confidence": -1.0,
+            }
+        ]
+    )
+    result = _parse_threads(raw)
+    t = result[0]
+    assert t["importance_score"] == 1.0
+    assert t["depth_score"] == 0.0
+    assert t["relevance_score"] == 1.0
+    assert t["extraction_confidence"] == 0.0
+
+
+def test_parse_threads_v11_defaults_when_missing():
+    """Missing v1.1 fields → use defaults."""
+    raw = json.dumps([{"content": "X", "importance_score": 0.5}])
+    result = _parse_threads(raw)
+    t = result[0]
+    assert t["depth_score"] == 0.5  # default
+    assert t["relevance_score"] == 0.5  # default
+    assert t["thread_type"] == "primary"  # default
+    assert t["extraction_confidence"] == 0.5  # default
+    assert t["related_thread_index"] is None  # default
+
+
+def test_parse_threads_v11_relation_evidence_truncated():
+    """relation_evidence truncated to 500 chars."""
+    long_evidence = "x" * 1000
+    raw = json.dumps(
+        [
+            {
+                "content": "X",
+                "importance_score": 0.5,
+                "relation_evidence": long_evidence,
+            }
+        ]
+    )
+    result = _parse_threads(raw)
+    assert len(result[0]["relation_evidence"]) <= 500
+
+
+def test_parse_threads_v11_backwards_compat():
+    """Old v1.0 format still works (all new fields optional)."""
+    old_v10_raw = json.dumps(
+        [
+            {
+                "content": "Old idea",
+                "importance_score": 0.6,
+                "tags": ["histoire"],
+            }
+        ]
+    )
+    result = _parse_threads(old_v10_raw)
+    assert len(result) == 1
+    assert result[0]["content"] == "Old idea"
+    assert result[0]["importance_score"] == 0.6

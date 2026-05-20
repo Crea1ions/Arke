@@ -16,16 +16,18 @@ Anchor modes (configured via arke.toml [cognitive_initiative_gate]):
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import re
 import uuid
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
 
+from arke.enricher import ArkeEnricher
 from arke.vector.embedder import Embedder, VectorDisabledError
 
 log = structlog.get_logger()
@@ -313,6 +315,9 @@ def log_initiative(
     density_snapshot: float,
     context_anchor: str,
     initiative_type: str = "soft_reactivation",
+    thread_raw: dict[str, Any] | None = None,
+    enrichment: dict[str, Any] | None = None,
+    contract_version: str | None = None,
 ) -> str:
     """Insert a row into initiative_log; return the generated uuid id.
 
@@ -320,17 +325,43 @@ def log_initiative(
 
     Args:
         initiative_type: 'soft_reactivation' (default) or 'divergent_reactivation'.
+        thread_raw: Optional Themelios thread dict (for contract traceability).
+        enrichment: Optional Archè enrichment metadata dict.
+        contract_version: Optional contract version (e.g., "1.0").
     """
     log_id = str(uuid.uuid4())
     try:
+        # Try with new columns first (thread_raw, arch_enrichment, contract_version)
+        thread_raw_json = json.dumps(thread_raw) if thread_raw else None
+        enrichment_json = json.dumps(enrichment) if enrichment else None
+        
         mm.query(
             "global",
-            "INSERT INTO initiative_log (id, thread_id, type, density_snapshot, context_anchor) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (log_id, str(thread_id), initiative_type, density_snapshot, context_anchor),
+            "INSERT INTO initiative_log (id, thread_id, type, density_snapshot, context_anchor, "
+            "thread_raw, arch_enrichment, contract_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                log_id,
+                str(thread_id),
+                initiative_type,
+                density_snapshot,
+                context_anchor,
+                thread_raw_json,
+                enrichment_json,
+                contract_version,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
-        log.debug("cig.log_initiative_error", error=str(exc))
+        # Fallback: columns may not exist yet (pre-migration)
+        try:
+            mm.query(
+                "global",
+                "INSERT INTO initiative_log (id, thread_id, type, density_snapshot, context_anchor) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (log_id, str(thread_id), initiative_type, density_snapshot, context_anchor),
+            )
+        except Exception as exc2:  # noqa: BLE001
+            log.debug("cig.log_initiative_error", error=str(exc2))
     return log_id
 
 
@@ -406,6 +437,31 @@ def auto_calibrate_threshold(mm: object, current_threshold: float) -> float:
     return current_threshold
 
 
+def _get_thread_raw(mm: object, thread_id: object) -> dict[str, Any]:
+    """Fetch complete thread data from cognitive_threads for enrichment.
+    
+    Returns a dict with all thread columns needed for Themelios contract validation.
+    Returns empty dict if thread not found.
+    """
+    try:
+        rows = mm.query(
+            "global",
+            "SELECT id, content, summary, reactivation_score, importance_score, "
+            "created_at, tags, days_dormant, density_snapshot, context_anchor "
+            "FROM cognitive_threads WHERE id = ? LIMIT 1",
+            (str(thread_id),),
+        )
+        if rows:
+            thread = dict(rows[0])
+            # Normalize thread_id key for enrichment schema
+            thread["thread_id"] = str(thread.get("id", thread_id))
+            thread["score"] = float(thread.get("reactivation_score") or 0.0)
+            return thread
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
 def cognitive_initiative_engine(
     mm: object,
     context: dict,
@@ -457,7 +513,22 @@ def cognitive_initiative_engine(
             if not text:
                 return None, None
             anchor = (divergent_thread.get("summary") or divergent_thread.get("content", "")[:60]).strip()
-            log_id = log_initiative(mm, divergent_thread["id"], density, anchor, "divergent_reactivation")
+            
+            # NEW: Enrich with Archè metadata
+            enricher = ArkeEnricher()
+            thread_raw = _get_thread_raw(mm, divergent_thread["id"])
+            text, enrichment = enricher.enrich(text, thread_raw, context)
+            
+            log_id = log_initiative(
+                mm,
+                divergent_thread["id"],
+                density,
+                anchor,
+                "divergent_reactivation",
+                thread_raw=thread_raw,
+                enrichment=enrichment,
+                contract_version=enricher.validator.contract_version,
+            )
             log.info("cig.divergent_initiative", thread_id=divergent_thread["id"], density=density)
             return text, log_id
         # No divergent thread available → fall through to normal contextual path
@@ -481,6 +552,20 @@ def cognitive_initiative_engine(
         return None, None
 
     anchor = (thread.get("summary") or thread.get("content", "")[:60]).strip()
-    log_id = log_initiative(mm, thread["id"], density, anchor)
+    
+    # NEW: Enrich with Archè metadata
+    enricher = ArkeEnricher()
+    thread_raw = _get_thread_raw(mm, thread["id"])
+    text, enrichment = enricher.enrich(text, thread_raw, context)
+    
+    log_id = log_initiative(
+        mm,
+        thread["id"],
+        density,
+        anchor,
+        thread_raw=thread_raw,
+        enrichment=enrichment,
+        contract_version=enricher.validator.contract_version,
+    )
     log.info("cig.initiative_generated", thread_id=thread["id"], density=density)
     return text, log_id

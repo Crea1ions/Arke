@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Themelios Thread Contract",
+  "version": "1.0",
+  "type": "object",
+  "required": ["thread_id", "content", "score", "created_at"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "UUID du fil"
+    },
+    "content": {
+      "type": "string",
+      "description": "Texte brut extrait"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0.05,
+      "maximum": 1.0,
+      "description": "reactivation_score après decay"
+    },
+    "days_dormant": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "density_snapshot": {
+      "type": "number",
+      "description": "AVG(avg_depth_score) 7d"
+    },
+    "context_anchor": {
+      "type": ["string", "null"]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_activated_at": {
+      "type": ["string", "null"]
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "invariant": "Aucun champ émotionnel ou subjectif. Tous les champs sont factuels, mesurés, traçables."
+}

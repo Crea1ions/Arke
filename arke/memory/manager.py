@@ -212,11 +212,23 @@ class MemoryManager:
         migrations = [
             "ALTER TABLE cognitive_threads ADD COLUMN reactivation_score REAL DEFAULT 0",
             "ALTER TABLE cognitive_threads ADD COLUMN density_context REAL",
+            # Phase S045: ThreadExtractor v1.1 — hierarchy, relations, enrichment
+            "ALTER TABLE cognitive_threads ADD COLUMN thread_type TEXT DEFAULT 'primary'",
+            "ALTER TABLE cognitive_threads ADD COLUMN depth_score REAL DEFAULT 0.5",
+            "ALTER TABLE cognitive_threads ADD COLUMN relevance_score REAL DEFAULT 0.5",
+            "ALTER TABLE cognitive_threads ADD COLUMN related_thread_id INTEGER",
+            "ALTER TABLE cognitive_threads ADD COLUMN relation_type TEXT",
+            "ALTER TABLE cognitive_threads ADD COLUMN relation_evidence TEXT",
+            "ALTER TABLE cognitive_threads ADD COLUMN extraction_confidence REAL DEFAULT 0.5",
             # Phase 2: GOAP plan tracking
             "ALTER TABLE agent_learnings ADD COLUMN plan_hash TEXT",
             "ALTER TABLE agent_learnings ADD COLUMN plan_approved_count INTEGER DEFAULT 0",
             "ALTER TABLE agent_learnings ADD COLUMN auto_executable INTEGER DEFAULT 0",
             "ALTER TABLE agent_learnings ADD COLUMN success_rate REAL DEFAULT 1.0",
+            # Phase S044: Themelios-Archè contract (thread_raw, enrichment, version)
+            "ALTER TABLE initiative_log ADD COLUMN thread_raw TEXT",
+            "ALTER TABLE initiative_log ADD COLUMN arch_enrichment TEXT",
+            "ALTER TABLE initiative_log ADD COLUMN contract_version TEXT DEFAULT '1.0'",
         ]
         for stmt in migrations:
             try:
