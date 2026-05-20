@@ -1984,8 +1984,12 @@ def start() -> None:
                 _print_help()
 
             elif cmd == "/clear":
-                memory_forget(mm, "")
-                print(f"{T.MUTED}Historique et notes effacés.{T.RESET}")
+                if "--all" in result.intention:
+                    memory_forget(mm, "--all")
+                    print(f"{T.MUTED}Mémoire complète effacée (session + apprentissages + threads cognitifs).{T.RESET}")
+                else:
+                    memory_forget(mm, "")
+                    print(f"{T.MUTED}Historique et notes effacés. (agent_learnings conservés — /clear --all pour tout effacer){T.RESET}")
 
             elif cmd == "/stats":
                 _print_stats(mm)

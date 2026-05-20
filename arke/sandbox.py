@@ -37,6 +37,11 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+
+class SandboxFallbackError(RuntimeError):
+    """Raised when bubblewrap fails at runtime and allow_fallback is false."""
+
+
 _CONFIG_PATH = Path(__file__).parent.parent / "config" / "arke.toml"
 _SECURITY_PATH = Path(__file__).parent.parent / "config" / "security.toml"
 
@@ -273,6 +278,7 @@ def sandboxed_run(
     if use_sandbox:
         cfg = load_sandbox_config()
         mode = cfg.get("mode", "workspace")
+        allow_fallback = cfg.get("allow_fallback", True)
 
         if mode == "full":
             argv = _build_full_argv(command)
@@ -288,6 +294,11 @@ def sandboxed_run(
         )
 
         if result.returncode != 0 and _is_bwrap_runtime_permission_error(result.stderr):
+            if not allow_fallback:
+                raise SandboxFallbackError(
+                    "bubblewrap runtime permission failure. "
+                    "Set [sandbox] allow_fallback = true in arke.toml to permit unsandboxed fallback."
+                )
             warnings.warn(
                 "bubblewrap runtime permission failure -- falling back to unsandboxed execution "
                 "in workspace cwd.",

@@ -40,7 +40,6 @@ from arke.task_graph import StepStatus
 
 
 SESSION_TIMEOUT_SECONDS = 12 * 60 * 60
-DEFAULT_ARKE_LOCAL_TOKEN = "arke-local-dev-token"
 
 NAVIGATION_MESSAGE = (
     "Arke - Aucun workspace n'est configure pour MyTeamHub.\n\n"
@@ -194,7 +193,10 @@ class MyTeamGateway:
                 workspace_root = self._normalize_workspace_root(Path(create_path))
                 workspace_root.mkdir(parents=True, exist_ok=True)
                 ensure_arke_workspace(workspace_root)
-                self._init_myteam_state(workspace_root)
+                try:
+                    self._init_myteam_state(workspace_root)
+                except RuntimeError as exc:
+                    return 503, {"error": str(exc)}
                 self._sessions[session_id] = SessionState(
                     workspace_root=workspace_root,
                     mode="ask",
@@ -216,7 +218,10 @@ class MyTeamGateway:
                 if not (workspace_root / ".arke").exists():
                     return 400, {"error": f"Workspace invalide: {workspace_root}/.arke introuvable"}
                 ensure_arke_workspace(workspace_root)
-                self._init_myteam_state(workspace_root)
+                try:
+                    self._init_myteam_state(workspace_root)
+                except RuntimeError as exc:
+                    return 503, {"error": str(exc)}
                 self._sessions[session_id] = SessionState(
                     workspace_root=workspace_root,
                     mode="ask",
@@ -332,7 +337,14 @@ class MyTeamGateway:
                 workspace_root = self._normalize_workspace_root(Path(create_path))
                 workspace_root.mkdir(parents=True, exist_ok=True)
                 ensure_arke_workspace(workspace_root)
-                self._init_myteam_state(workspace_root)
+                try:
+                    self._init_myteam_state(workspace_root)
+                except RuntimeError as exc:
+                    agg = BlockAggregator()
+                    yield from agg.add_text(f"Configuration error: {exc}")
+                    yield from agg.flush()
+                    yield agg.done()
+                    return
                 self._sessions[session_id] = SessionState(workspace_root=workspace_root, mode="ask", last_seen=time.time())
                 agg = BlockAggregator()
                 yield from agg.add_text(f"Workspace configure : {workspace_root}/.arke\nSession MyTeamHub active. Vous pouvez commencer.")
@@ -350,7 +362,14 @@ class MyTeamGateway:
                     yield agg.done()
                     return
                 ensure_arke_workspace(workspace_root)
-                self._init_myteam_state(workspace_root)
+                try:
+                    self._init_myteam_state(workspace_root)
+                except RuntimeError as exc:
+                    agg = BlockAggregator()
+                    yield from agg.add_text(f"Configuration error: {exc}")
+                    yield from agg.flush()
+                    yield agg.done()
+                    return
                 self._sessions[session_id] = SessionState(workspace_root=workspace_root, mode="ask", last_seen=time.time())
                 agg = BlockAggregator()
                 yield from agg.add_text(f"Workspace configure : {workspace_root}/.arke\nSession MyTeamHub active. Vous pouvez commencer.")
@@ -622,7 +641,13 @@ class MyTeamGateway:
         (myteam_root / "structure").mkdir(parents=True, exist_ok=True)
 
         state_path = myteam_root / "state.json"
-        token = os.environ.get("ARKE_MYTEAM_TOKEN") or DEFAULT_ARKE_LOCAL_TOKEN
+        token = os.environ.get("ARKE_MYTEAM_TOKEN")
+        if not token:
+            raise RuntimeError(
+                "ARKE_MYTEAM_TOKEN environment variable must be set to use MyTeamHub.\n"
+                "Generate a token: export ARKE_MYTEAM_TOKEN=$(python3 -c "
+                "'import secrets; print(secrets.token_hex(32))')"
+            )
         state = {
             "workspace_root": str(workspace_root),
             "token": token,

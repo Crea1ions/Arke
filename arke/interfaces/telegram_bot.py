@@ -114,6 +114,7 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ctx: dict[str, Any] = {
         "session_id": f"telegram:{chat_id}",
         "channel": "telegram",
+        "agent_mode": "agent",
     }
 
     # Ask agent what to do (direct response or tool execution)

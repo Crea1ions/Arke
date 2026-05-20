@@ -67,6 +67,28 @@ class TestMaskSecrets:
         assert "sk_test_abc123xyz" not in masked
         assert "Bearer ***" in masked
 
+    # S050 — H4: URL query param masking
+    def test_mask_url_query_key(self):
+        """?key= in URL should be masked."""
+        masked = mask_secrets("curl https://api.example.com?key=supersecret123")
+        assert "supersecret123" not in masked
+        assert "?key=***" in masked
+
+    def test_mask_url_query_token(self):
+        """?token= secret in URL should be masked."""
+        masked = mask_secrets("curl https://api.example.com?token=abc123&page=2")
+        assert "abc123" not in masked
+
+    def test_mask_url_query_access_token(self):
+        """?access_token= in URL should be masked."""
+        masked = mask_secrets("GET https://svc.io/v1/data?access_token=tok_XYZ&fmt=json")
+        assert "tok_XYZ" not in masked
+
+    def test_mask_url_query_amp_secret(self):
+        """&secret= after other params should be masked."""
+        masked = mask_secrets("curl 'https://api.io?page=1&secret=my_secret_val'")
+        assert "my_secret_val" not in masked
+
 
 class TestTruncateCommand:
     def test_short_command_unchanged(self):

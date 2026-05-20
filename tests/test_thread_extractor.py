@@ -297,3 +297,40 @@ def test_parse_threads_v11_backwards_compat():
     assert len(result) == 1
     assert result[0]["content"] == "Old idea"
     assert result[0]["importance_score"] == 0.6
+
+
+# ---------------------------------------------------------------------------
+# S050 — L1: prompt template uses .replace(), not .format()
+# ---------------------------------------------------------------------------
+
+
+def test_extraction_prompt_replace_no_key_error():
+    """_EXTRACTION_PROMPT.replace() must not raise KeyError even when the
+    prompt contains literal curly braces (JSON examples in the template)."""
+    from arke.thread_extractor import _EXTRACTION_PROMPT
+
+    # This would raise KeyError with .format() if the prompt has {json_field}
+    prompt = _EXTRACTION_PROMPT.replace("{exchange}", "test user message")
+    assert "test user message" in prompt
+
+
+def test_extraction_worker_no_key_error():
+    """_extraction_worker should not swallow a KeyError when building the prompt."""
+    from arke.thread_extractor import extract_async, CANCEL_GRACE_SECONDS
+
+    marker = _COGNITIVE_MARKERS[0]
+    long_text = f"{marker} " + ("test " * 100)
+
+    mm = MagicMock()
+    cancel_event = threading.Event()
+
+    with patch("arke.llm.litellm_manager.LiteLLMManager") as mock_llm_cls:
+        mock_llm = MagicMock()
+        mock_llm_cls.return_value = mock_llm
+        mock_llm.complete.return_value = ("[]", 0.0, 0)
+
+        thread = extract_async(mm, "sess-s050", long_text, long_text, cancel_event)
+        thread.join(timeout=CANCEL_GRACE_SECONDS + 5)
+
+        # LLM must have been called (no early exit from exception)
+        mock_llm.complete.assert_called_once()

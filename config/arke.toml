@@ -50,6 +50,7 @@ prometheus    = false
 enabled      = true
 mode         = "workspace"
 max_size_mb  = 500
+allow_fallback = false  # if true, bwrap runtime failures fall back to unsandboxed execution
 
 # ===========================================================================
 # Agent — Identité minimale (le contrat cognitif porte le reste)

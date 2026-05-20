@@ -35,6 +35,15 @@ class TestBootstrap:
         for name in ("global.db", "project.db", "session.db", "cache.db"):
             assert (tmp_path / name).exists()
 
+    def test_db_permissions_600(self, mm, tmp_path):
+        """Newly created .db files must have owner-only permissions (600)."""
+        import stat
+
+        for name in ("global.db", "project.db", "session.db", "cache.db"):
+            path = tmp_path / name
+            mode = stat.S_IMODE(path.stat().st_mode)
+            assert mode == 0o600, f"{name} has mode {oct(mode)}, expected 0o600"
+
     def test_wal_mode_enabled(self, mm, tmp_path):
         conn = sqlite3.connect(tmp_path / "global.db")
         row = conn.execute("PRAGMA journal_mode").fetchone()
@@ -194,3 +203,36 @@ def test_load_db_paths_workspace_default_session_is_dated(tmp_path, monkeypatch)
 
     expected_name = f"session_{datetime.now().strftime('%Y%m%d')}.db"
     assert paths["session"] == workspace_root / ".arke" / "sessions" / expected_name
+
+
+# ---------------------------------------------------------------------------
+# S050 — H3/H5: DB permissions migration
+# ---------------------------------------------------------------------------
+
+
+def test_db_permissions_migration_from_644(tmp_path, monkeypatch):
+    """Existing .db files with world-readable permissions (644) must be
+    migrated to 600 when MemoryManager bootstraps."""
+    import os
+    import stat
+
+    # Pre-create a global.db with 644 permissions (as if created before the fix)
+    db_path = tmp_path / "global.db"
+    db_path.touch()
+    os.chmod(db_path, 0o644)
+    assert stat.S_IMODE(db_path.stat().st_mode) == 0o644
+
+    monkeypatch.setattr(
+        mod,
+        "_load_db_paths",
+        lambda: {
+            "global": db_path,
+            "project": tmp_path / "project.db",
+            "session": tmp_path / "session.db",
+            "cache": tmp_path / "cache.db",
+        },
+    )
+    MemoryManager()
+
+    mode = stat.S_IMODE(db_path.stat().st_mode)
+    assert mode == 0o600, f"Expected 600 after migration, got {oct(mode)}"

@@ -160,6 +160,7 @@ def run(
         typer.echo(f"Initialized local workspace at {init_result.arke_root}")
 
     ctx["WORKSPACE_ROOT"] = os.environ["WORKSPACE_ROOT"]
+    ctx["agent_mode"] = "agent"
 
     task = orchestrator.run(intention, ctx)
 

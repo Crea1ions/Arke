@@ -26,6 +26,7 @@ def mask_secrets(command: str) -> str:
         (r'TOKEN=\S+', 'TOKEN=***'),
         (r'Authorization:\s+Bearer\s+\S+', 'Authorization: Bearer ***'),
         (r'api[_-]key[=\s]\S+', 'api_key=***'),
+        (r'([?&](?:key|token|secret|auth|password|api_key|access_token)=)[^&\s"\']+', r'\1***'),
     ]
     
     result = command

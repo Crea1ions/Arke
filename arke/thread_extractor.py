@@ -174,7 +174,7 @@ def _extraction_worker(
             time.sleep(0.1)
 
         exchange_text = f"[USER]\n{user_msg}\n\n[AGENT]\n{agent_response}"
-        prompt = _EXTRACTION_PROMPT.format(exchange=exchange_text)
+        prompt = _EXTRACTION_PROMPT.replace("{exchange}", exchange_text)
 
         from arke.llm.litellm_manager import LiteLLMManager
 

@@ -204,13 +204,21 @@ def memory_read(mm: MemoryManager, query: str) -> str:
 def memory_forget(mm: MemoryManager, target: str) -> int:
     """Clear session memory.
 
-    * If *target* is empty: delete all ``chat_notes`` and ``chat_history``.
-    * If *target* has keywords: remove lines that contain any significant
-      keyword from *target* (tolerant matching, handles paraphrasing).
+    * If *target* is ``"--all"``: delete session memory **and** global
+      ``agent_learnings`` / ``cognitive_threads``.
+    * If *target* is empty: delete ``chat_notes`` and ``chat_history`` only.
+    * If *target* has keywords: remove matching lines from ``chat_notes``.
 
     Returns:
-        Number of items removed.
+        Number of items removed, or -1 for a full purge.
     """
+    if target.strip() == "--all":
+        mm.query("session", "DELETE FROM session_context WHERE key = 'chat_notes'", ())
+        mm.query("session", "DELETE FROM chat_history", ())
+        mm.query("global", "DELETE FROM agent_learnings", ())
+        mm.query("global", "DELETE FROM cognitive_threads", ())
+        return -1  # sentinel: full purge
+
     if not target:
         mm.query("session", "DELETE FROM session_context WHERE key = 'chat_notes'", ())
         rows = mm.query("session", "SELECT COUNT(*) AS n FROM chat_history", ())

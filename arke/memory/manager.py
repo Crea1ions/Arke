@@ -173,6 +173,11 @@ class MemoryManager:
             if db == "global":
                 self._validate_schema(conn)
 
+        # Restrict DB file permissions to owner-only (600).
+        # Handles both new files (just created by _connect) and existing
+        # files that were previously created with too-permissive defaults.
+        os.chmod(path, 0o600)
+
         # One-time FTS5 rebuild for session.db to populate existing chat_history rows
         if db == "session":
             with self._connect(db) as conn:

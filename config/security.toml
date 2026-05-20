@@ -12,8 +12,8 @@ allowed_commands = [
     "mogrify", "convert", "ffmpeg",
     # Dev
     "git", "python", "python3",
-    # Network (read-only)
-    "curl", "wget", "jq",
+    # Network (read-only — curl/wget removed, use MCP for HTTP requests)
+    "jq",
     # File ops
     "date", "touch", "rm", "mkdir", "cp", "mv", "printf"
 ]
