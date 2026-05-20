@@ -59,16 +59,14 @@ def is_valid_mode(mode: str) -> bool:
 
 #: Tools permitted per mode. ``None`` means unrestricted (agent mode).
 MODE_PERMISSIONS: dict[str, frozenset[str] | None] = {
-    "ask":    frozenset({
-        "fs", "memory_fts", "memory_read", "memory_search",
-    }),
+    "ask":    frozenset(),
     "search": frozenset({
-        "fs", "sqlite", "memory_fts", "memory_read", "memory_search",
+        "sqlite", "memory_fts", "memory_read", "memory_search",
         "vector_search", "web_search", "rss_reader", "calculator", "mcp",
     }),
     "plan":   frozenset({
-        "fs", "memory_fts", "memory_read", "memory_search",
-        "vector_search",
+        "sqlite", "memory_fts", "memory_read", "memory_search",
+        "memory_write", "memory_forget", "vector_search",
     }),
     "agent":  None,  # accès complet
 }

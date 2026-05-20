@@ -497,26 +497,22 @@ def test_get_workspace_command_handler():
 
 
 def test_workspace_commands_in_router():
-    """Test that workspace commands are registered in chat router for routing.
-    
-    All 6 workspace commands (/show_workspace + 5 sub-commands) are in SLASH_COMMANDS
-    for routing, but only /show_workspace appears in /help (sub-commands are shown
-    in /show_workspace output to keep /help clean).
+    """Only /show_workspace is routed as a slash command in the chat router.
+
+    Section commands are resolved through workspace_commands registry and rendered
+    from /show_workspace output, not exposed as top-level slash routes.
     """
     from arke.chat_router import SLASH_COMMANDS
-    
-    # Verify all workspace commands are in router for routing
-    expected_cmds = {
-        "/show_workspace",
+
+    assert "/show_workspace" in SLASH_COMMANDS
+    for legacy_cmd in (
         "/show_mobile_notes",
         "/show_code",
         "/show_projects",
         "/show_shared",
         "/show_archive",
-    }
-    
-    for cmd in expected_cmds:
-        assert cmd in SLASH_COMMANDS, f"{cmd} not found in SLASH_COMMANDS"
+    ):
+        assert legacy_cmd not in SLASH_COMMANDS
 
 
 def test_wvs_imports_no_circular_dependency():

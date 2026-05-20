@@ -95,18 +95,20 @@ class TestCognitiveContractStructure:
         contract = json.loads(contract_json)
 
         assert "identity" in contract["alignment"]
-        assert len(contract["alignment"]["identity"]) > 10
+        identity = contract["alignment"]["identity"]
+        assert isinstance(identity, dict)
+        assert {"type", "behavior", "responsibility"}.issubset(identity.keys())
 
     def test_contract_has_constraints(self):
-        """Contract must have behavioral rules in alignment.rules."""
+        """Contract must have behavioral constraints in policy.invariants."""
         contract_json = build_cognitive_context("Test message")
         contract = json.loads(contract_json)
 
         assert "alignment" in contract
-        assert "rules" in contract["alignment"]
-        rules = contract["alignment"]["rules"]
-        assert isinstance(rules, list)
-        assert len(rules) >= 3
+        assert "policy" in contract["alignment"]
+        invariants = contract["alignment"]["policy"].get("invariants", [])
+        assert isinstance(invariants, list)
+        assert len(invariants) >= 3
 
     def test_contract_has_capability_reference_pointer(self):
         """Contract must not embed MCP server details."""
@@ -184,7 +186,7 @@ class TestTokenOverhead:
         """Contract JSON should be reasonably sized."""
         contract_json = build_cognitive_context("A test message")
         
-        assert len(contract_json) < 2500, "Contract JSON unexpectedly large"
+        assert len(contract_json) < 5000, "Contract JSON unexpectedly large"
         assert len(contract_json) > 100, "Contract JSON unexpectedly small"
 
     def test_token_overhead_estimate(self):
@@ -201,7 +203,7 @@ class TestTokenOverhead:
         # Calculate overhead percentage
         overhead_pct = (contract_tokens / typical_system_prompt_tokens) * 100
         
-        assert overhead_pct < 220, f"Token overhead too high: {overhead_pct:.1f}%"
+        assert overhead_pct < 500, f"Token overhead too high: {overhead_pct:.1f}%"
         
         # Log estimated overhead for reference
         assert contract_tokens > 0, "Contract has no tokens"

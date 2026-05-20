@@ -158,7 +158,7 @@ _ABOUT_MARKDOWN = """# À propos d'Arke
 
 ---
 
-## Les quatre piliers
+## Les trois piliers (et l'ouverture Koinonia)
 
 ### Archè (Ἀρχὴ) — Le Principe
 
@@ -221,6 +221,18 @@ _ABOUT_MARKDOWN = """# À propos d'Arke
             organiser, anticiper.
 
 - **/agent**    Passer à l'exécution avec visibilité et confirmation.
+
+## Dialogue actif (ask+)
+
+- Le **Dialogue actif** permet à Arke de relancer la conversation de manière contextuelle,
+    uniquement en mode **/ask**.
+- Quand il est actif, le prompt affiche **[ask+]**.
+- Contrôles :
+    - `/dialogue-actif on|off` : activation persistante (survit aux sessions)
+    - `/suspendre-dialogue [heures]` : pause temporaire
+    - `/reprendre-dialogue` : reprise après pause
+- Les commandes legacy `/initiative`, `/pause-initiatives`, `/resume-initiatives`
+    restent acceptées pour compatibilité.
 
 
 - Les modes ne sont pas des limitations arbitraires. Ils servent à **clarifier** les **responsabilités** du **système** et à limiter les comportements implicites.
@@ -338,6 +350,9 @@ def _read_paste_buffered(prompt: str) -> str:
 # Active model alias for the current session (mutable via @alias or /model)
 _active_model_alias: list[str] = ["flash"]
 
+# Prompt marker state for Dialogue actif (ask+ badge when active).
+_initiative_prompt_active: list[bool] = [False]
+
 # Agent mode state is managed by arke.mode_manager
 
 # Spinner frames for loading indication
@@ -371,9 +386,10 @@ def _prompt_with_mode() -> str:
     """Build the REPL prompt string with mode badge and model alias."""
     base = T.prompt_line(_get_alias())
     mode = _get_mode()
+    mode_badge = "ask+" if mode == "ask" and _initiative_prompt_active[0] else mode
     # Inject the mode badge just before the › character.
     # T.prompt_line returns: "\n{mlabel} · {ts}\n{ACCENT}›{RESET} "
-    badge = f"{T.MUTED}[{mode}]{T.RESET} "
+    badge = f"{T.MUTED}[{mode_badge}]{T.RESET} "
     return base.replace(f"\n{T.ACCENT}›{T.RESET} ", f"\n{badge}{T.ACCENT}›{T.RESET} ")
 
 
@@ -1498,6 +1514,16 @@ def start() -> None:
     if not _initiative_user_enabled[0]:
         _social_orchestrator.disable()
 
+    def _refresh_prompt_mode_badge() -> None:
+        """Keep prompt badge in sync with effective dialogue state."""
+        _initiative_prompt_active[0] = (
+            _get_mode() == "ask"
+            and _initiative_user_enabled[0]
+            and _social_orchestrator._enabled
+        )
+
+    _refresh_prompt_mode_badge()
+
     # Initialize workspace cache (WVS)
     try:
         import tomllib
@@ -1907,6 +1933,7 @@ def start() -> None:
 
     while True:
         try:
+            _refresh_prompt_mode_badge()
             # Signal any pending extraction to abort (user is active)
             _social_orchestrator.record_input()
             if _cancel_extraction[0] is not None:
@@ -2021,7 +2048,7 @@ def start() -> None:
                 except (ValueError, IndexError):
                     print(f"{T.MUTED}Usage : /drop-thread <id>{T.RESET}")
 
-            elif cmd == "/pause-initiatives":
+            elif cmd in ("/suspendre-dialogue", "/pause-initiatives"):
                 hours = 8.0
                 parts = raw.split()
                 if len(parts) > 1:
@@ -2029,12 +2056,20 @@ def start() -> None:
                         hours = float(parts[1].rstrip("h"))
                     except ValueError:
                         pass
+                if cmd == "/pause-initiatives":
+                    print(f"{T.MUTED}Alias legacy: utilisez /suspendre-dialogue.{T.RESET}")
                 _social_orchestrator.pause(hours)
-                print(f"{T.MUTED}Initiatives suspendues pour {hours:.0f}h.{T.RESET}")
+                _refresh_prompt_mode_badge()
+                print(
+                    f"{T.MUTED}Dialogue actif en pause pour {hours:.0f}h (temporaire). "
+                    f"Utilisez /reprendre-dialogue pour reprendre avant échéance.{T.RESET}"
+                )
 
-            elif cmd == "/initiative":
+            elif cmd in ("/dialogue-actif", "/initiative"):
                 parts = raw.split()
                 arg = parts[1].lower() if len(parts) > 1 else ""
+                if cmd == "/initiative":
+                    print(f"{T.MUTED}Alias legacy: utilisez /dialogue-actif.{T.RESET}")
                 if arg == "on":
                     _initiative_user_enabled[0] = True
                     try:
@@ -2047,7 +2082,11 @@ def start() -> None:
                         pass
                     if _get_mode() == "ask":
                         _social_orchestrator.enable()
-                    print(f"{T.MUTED}Initiatives activées (persistant).{T.RESET}")
+                    _refresh_prompt_mode_badge()
+                    print(
+                        f"{T.MUTED}Dialogue actif activé (persistant). En mode /ask, Arke peut "
+                        f"proposer des relances contextuelles. Le prompt passe en [ask+].{T.RESET}"
+                    )
                 elif arg == "off":
                     _initiative_user_enabled[0] = False
                     try:
@@ -2059,16 +2098,36 @@ def start() -> None:
                     except Exception:  # noqa: BLE001
                         pass
                     _social_orchestrator.disable()
-                    print(f"{T.MUTED}Initiatives désactivées (persistant).{T.RESET}")
+                    _refresh_prompt_mode_badge()
+                    print(
+                        f"{T.MUTED}Dialogue actif désactivé (persistant). Aucune relance ne sera "
+                        f"proposée tant que vous ne le réactivez pas.{T.RESET}"
+                    )
                 else:
-                    state = "activées" if _initiative_user_enabled[0] else "désactivées"
-                    active = "active" if _social_orchestrator._enabled else "en veille"
-                    print(f"{T.MUTED}Initiatives : {state} — orchestrateur {active}.{T.RESET}")
-                    print(f"{T.MUTED}Usage : /initiative on | /initiative off{T.RESET}")
+                    if not _initiative_user_enabled[0]:
+                        state = "désactivé (persistant)"
+                    elif _get_mode() != "ask":
+                        state = f"en veille (mode /{_get_mode()})"
+                    elif _social_orchestrator._enabled:
+                        state = "actif (ask+)"
+                    else:
+                        state = "en pause temporaire"
+                    print(f"{T.MUTED}Dialogue actif : {state}.{T.RESET}")
+                    print(f"{T.MUTED}Usage : /dialogue-actif on | /dialogue-actif off{T.RESET}")
+                    print(f"{T.MUTED}Pause temporaire : /suspendre-dialogue [heures]{T.RESET}")
 
-            elif cmd == "/resume-initiatives":
-                _social_orchestrator.resume()
-                print(f"{T.MUTED}Initiatives réactivées.{T.RESET}")
+            elif cmd in ("/reprendre-dialogue", "/resume-initiatives"):
+                if cmd == "/resume-initiatives":
+                    print(f"{T.MUTED}Alias legacy: utilisez /reprendre-dialogue.{T.RESET}")
+                if not _initiative_user_enabled[0]:
+                    print(
+                        f"{T.MUTED}Dialogue actif est désactivé en persistant. "
+                        f"Activez-le d'abord avec /dialogue-actif on.{T.RESET}"
+                    )
+                else:
+                    _social_orchestrator.resume()
+                    _refresh_prompt_mode_badge()
+                    print(f"{T.MUTED}Dialogue actif réactivé.{T.RESET}")
 
             # Agent mode commands
             elif cmd == "/ask":
@@ -2084,6 +2143,7 @@ def start() -> None:
                 print(f"{T.MUTED}[ask] Mode analyse actif — aucun outil.{T.RESET}")
                 if _initiative_user_enabled[0]:
                     _social_orchestrator.enable()
+                _refresh_prompt_mode_badge()
 
             elif cmd == "/search":
                 _set_mode("search")
@@ -2097,6 +2157,7 @@ def start() -> None:
                     pass
                 print(f"{T.MUTED}[search] Lecture seule (SQLite, FTS, MCP search).{T.RESET}")
                 _social_orchestrator.disable()
+                _refresh_prompt_mode_badge()
 
             elif cmd == "/plan":
                 _set_mode("plan")
@@ -2110,6 +2171,7 @@ def start() -> None:
                     pass
                 print(f"{T.MUTED}[plan] Mémoire session autorisée, aucune exécution système.{T.RESET}")
                 _social_orchestrator.disable()
+                _refresh_prompt_mode_badge()
 
             elif cmd == "/agent":
                 _set_mode("agent")
@@ -2123,6 +2185,7 @@ def start() -> None:
                     pass
                 print(f"{T.WARNING}⚠ [agent] Mode exécution actif — outils système disponibles.{T.RESET}")
                 _social_orchestrator.disable()
+                _refresh_prompt_mode_badge()
 
             else:
                 print(f"{T.MUTED}Commande inconnue : {cmd}. Tapez /help pour la liste.{T.RESET}")
@@ -2444,10 +2507,34 @@ def _print_status(mm: Any) -> None:
         rows2 = mm.query("session", "SELECT value FROM session_context WHERE key = 'chat_notes'", ())
         notes = rows2[0]["value"] if rows2 else ""
         n_notes = len([l for l in notes.splitlines() if l.strip()]) if notes else 0
+        rows3 = mm.query(
+            "session",
+            "SELECT value FROM session_context WHERE key = 'initiative_user_enabled'",
+            (),
+        )
+        dialogue_enabled = (rows3[0]["value"] != "false") if rows3 else True
+        rows4 = mm.query(
+            "session",
+            "SELECT value FROM session_context WHERE key = 'so_pause_until'",
+            (),
+        )
+        pause_until = float(rows4[0]["value"]) if rows4 and rows4[0].get("value") else 0.0
+        paused_now = pause_until > time.time()
+
+        if not dialogue_enabled:
+            dialogue_state = "désactivé (persistant)"
+        elif _get_mode() != "ask":
+            dialogue_state = f"en veille (mode /{_get_mode()})"
+        elif paused_now:
+            dialogue_state = "en pause temporaire"
+        else:
+            dialogue_state = "actif (ask+)"
+
         lines.append("")
         lines.append(f"{T.ACCENT}Session{T.RESET}")
         lines.append("")
         lines.append(f"  {T.MUTED}mode agent{T.RESET}          {T.ACCENT}/{_get_mode()}{T.RESET}")
+        lines.append(f"  {T.MUTED}dialogue actif{T.RESET}      {T.TEXT}{dialogue_state}{T.RESET}")
         lines.append(f"  {T.MUTED}messages historique{T.RESET}  {T.TEXT}{n_msgs}{T.RESET}")
         lines.append(f"  {T.MUTED}notes mémorisées{T.RESET}    {T.TEXT}{n_notes}{T.RESET}")
     except Exception:  # noqa: BLE001

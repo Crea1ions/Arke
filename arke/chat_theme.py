@@ -385,6 +385,9 @@ def initiative_block(text: str) -> str:
     """
     from datetime import datetime
     ts = datetime.now().strftime("%H:%M")
-    header = f"{BORDER}├─{RESET} {_INITIATIVE_C}◈ arke{RESET} {MUTED}· {ts} · reprise cognitive{RESET}"
+    header = (
+        f"{BORDER}├─{RESET} {_INITIATIVE_C}◈ arke{RESET} "
+        f"{MUTED}· {ts} · Dialogue actif{RESET}"
+    )
     content = f"{BORDER}│{RESET}  {ITALIC}{_INITIATIVE_C}{text}{RESET}"
     return f"{BORDER}│{RESET}\n{header}\n{content}"

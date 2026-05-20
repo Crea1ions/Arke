@@ -185,7 +185,7 @@ class TestLoadModeSchema:
     def test_search_schema_has_alignment_output(self):
         schema = mm.load_mode_schema("search")
         assert "alignment" in schema
-        assert "output" in schema.get("alignment", {})
+        assert "output_spec" in schema.get("alignment", {})
 
     def test_plan_schema_has_handoffs(self):
         schema = mm.load_mode_schema("plan")
@@ -193,7 +193,7 @@ class TestLoadModeSchema:
 
     def test_agent_schema_has_workflow(self):
         schema = mm.load_mode_schema("agent")
-        assert "workflow" in schema.get("alignment", {})
+        assert "strategy" in schema.get("alignment", {})
 
     def test_unknown_mode_returns_empty_dict(self):
         schema = mm.load_mode_schema("nonexistent_mode")
