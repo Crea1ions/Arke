@@ -1,5 +1,15 @@
 {
   "mode": "plan",
+  "state": {
+    "columns": [
+      "mode",
+      "session_id",
+      "goal",
+      "next_action",
+      "steps_count",
+      "response_text"
+    ]
+  },
   "reference_author": "Xénophon",
   "description": "Planning and system design mode. Produces structured, multi-step execution plans without implementation.",
   "argument_hint": "Outline the goal or problem to plan",

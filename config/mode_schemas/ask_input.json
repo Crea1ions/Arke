@@ -1,5 +1,16 @@
 {
   "mode": "ask",
+  "state": {
+    "columns": [
+      "mode",
+      "session_id",
+      "theme",
+      "question_ouverte",
+      "decision",
+      "response_text"
+    ],
+    "decision_semantics": "shared"
+  },
   "reference_author": "Platon",
   "description": "Read-only reasoning and explanation mode. No system modifications.",
   "argument_hint": "Ask a question about your code, architecture, or system behavior",

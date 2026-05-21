@@ -1,5 +1,21 @@
 {
   "mode": "agent",
+  "state": {
+    "columns": [
+      "mode",
+      "session_id",
+      "task",
+      "tool_requested",
+      "status",
+      "response_text"
+    ],
+    "status_values": [
+      "pending",
+      "in_progress",
+      "done",
+      "failed"
+    ]
+  },
   "reference_author": "Eschyle",
   "description": "Execution mode with controlled autonomy. Performs technical tasks, applies changes, and resolves errors.",
   "argument_hint": "Describe the task to execute",
