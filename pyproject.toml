@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12",
     "litellm>=1.40",
+    "PyYAML>=6.0",
     "python-telegram-bot>=21.0",
     "structlog>=24.1",
     "jsonschema>=4.22",

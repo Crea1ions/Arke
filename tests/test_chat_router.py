@@ -8,7 +8,11 @@ import pytest
 
 import arke.memory.manager as mod
 from arke.memory.manager import MemoryManager
-from arke.chat_router import memory_forget
+from arke.chat_router import SLASH_COMMANDS, memory_forget
+
+
+def test_codex_slash_command_registered():
+    assert "/codex" in SLASH_COMMANDS
 
 
 @pytest.fixture()

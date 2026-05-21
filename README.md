@@ -68,6 +68,7 @@ Only memory accumulation over time.
 | **Multi-Provider LLM Layer**   | Gemini, Claude, Mistral, OpenAI, Ollama                        |
 | **OpenTelemetry Integration**  | Full tracing of execution and cost                             |
 | **Terminal REPL**              | Natural language command interface with mode badge             |
+| **Workspace Codex**            | Local shared memory (`codex_ask` / `codex_opt`) per workspace |
 | **Telegram Interface**         | Optional transport layer (no business logic)                   |
 | **External Bridges (optional)** | Complementary connectors outside Arke core                     |
 
@@ -230,6 +231,23 @@ The REPL now starts without blocking startup prompts.
 * startup banner rendered once with repository path displayed first
 * compact fallback banner when terminal width or Unicode support is insufficient
 The legacy WCU tree (`arke-workspace/WCU`) is treated as an optional artifact for workspace views only: it is not auto-created and is not synced from the launcher directory.
+
+### Workspace Codex
+
+Arke supports a workspace-local Codex designed to capture project culture and conventions.
+
+Each workspace owns two YAML files in `.arke/`:
+
+* `.arke/codex_ask.yaml` for reflective guidance in `/ask`
+* `.arke/codex_opt.yaml` for operational guidance in `/search`, `/plan`, `/agent`
+
+The Codex is local, editable, and mode-aware:
+
+* `/codex` shows a summary and available Codex commands
+* `/codex ask` and `/codex opt` display each Codex file
+* `/codex ask edit` and `/codex opt edit` update Codex entries explicitly
+
+Codex is preference/context memory. It does not override mode permissions or Themelios safety rules.
 
 ---
 

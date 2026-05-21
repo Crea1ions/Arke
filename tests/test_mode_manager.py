@@ -199,6 +199,13 @@ class TestLoadModeSchema:
         schema = mm.load_mode_schema("nonexistent_mode")
         assert schema == {}
 
+    def test_all_mode_schemas_define_state_columns(self):
+        for mode in ("ask", "search", "plan", "agent"):
+            schema = mm.load_mode_schema(mode)
+            cols = schema.get("state", {}).get("columns", [])
+            assert isinstance(cols, list)
+            assert cols, f"state.columns missing for mode={mode}"
+
 
 # ---------------------------------------------------------------------------
 # TestBuildInputContext
@@ -262,3 +269,13 @@ class TestBuildInputContext:
         )
         ctx = json.loads(result)
         assert ctx["runtime"]["WORKSPACE_ROOT"] == "/tmp/arke-ws"
+
+    def test_codex_is_injected_when_workspace_is_provided(self, tmp_path):
+        result = mm.build_input_context(
+            "ask",
+            "hello",
+            workspace_root=str(tmp_path),
+        )
+        ctx = json.loads(result)
+        assert "codex" in ctx
+        assert ctx["codex"]["kind"] == "ask"

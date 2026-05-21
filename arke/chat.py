@@ -62,8 +62,16 @@ from arke.mode_manager import (
     set_mode as _set_mode,
     is_valid_mode,
     build_input_context,
+    load_mode_schema,
     _VALID_MODES,
 )
+from arke.codex.manager import (
+    append_codex_entry,
+    ensure_codex_files,
+    read_codex_text,
+    render_codex_summary,
+)
+from arke.formatters.csv_formatter import format_csv_header_only, format_csv_rows
 log = structlog.get_logger()
 
 # Theme is loaded lazily so tests that don't import chat.py directly still work
@@ -233,6 +241,32 @@ _ABOUT_MARKDOWN = """# À propos d'Arke
     - `/reprendre-dialogue` : reprise après pause
 - Les commandes legacy `/initiative`, `/pause-initiatives`, `/resume-initiatives`
     restent acceptées pour compatibilité.
+
+## Le Codex : la mémoire locale du workspace
+
+Un agent connaît les outils.
+Il ne connaît pas les conventions du projet dans lequel il travaille.
+
+La branche par défaut, les commandes privilégiées, les flags de test, les dossiers sensibles, les invariants implicites ou les habitudes d'équipe : cette connaissance n'existe nulle part ailleurs que dans le workspace et dans l'expérience de ses utilisateurs.
+
+Le Codex la rend explicite, persistante et partageable.
+
+Chaque workspace possède son propre Codex : un fichier YAML enrichi au fil des sessions par l'utilisateur et par l'agent.
+Il ne contient pas ce que l'agent sait déjà.
+Il contient ce que le projet lui-même lui apprend.
+
+Deux Codex cohabitent :
+
+le Codex opérationnel, qui guide l'action : conventions, commandes, contraintes, habitudes de travail ;
+le Codex réflexif, qui guide la pensée : principes, cadres d'analyse, questions ouvertes, références.
+
+À chaque entrée dans un mode, Arke charge le Codex correspondant afin d'adapter son comportement au contexte réel du workspace.
+
+Le Codex n'est ni une mémoire globale, ni un système de règles figé.
+C'est une mémoire locale, évolutive et située.
+
+Il ne remplace ni Themelios, ni le contrat cognitif, ni les skills.
+Il capture ce qu'aucun d'eux ne peut réellement contenir : la culture vivante d'un projet.
 
 
 - Les modes ne sont pas des limitations arbitraires. Ils servent à **clarifier** les **responsabilités** du **système** et à limiter les comportements implicites.
@@ -612,6 +646,136 @@ def build_cognitive_context(user_message: str, session_id: str = "") -> str:
         user_message=user_message,
         session_id=session_id,
         workspace_root=workspace_root,
+    )
+
+
+def _mode_csv_columns(mode: str) -> list[str]:
+    """Return CSV columns declared by mode schema state.columns.
+
+    If absent, return a minimal fallback header.
+    """
+    schema = load_mode_schema(mode)
+    cols = schema.get("state", {}).get("columns", []) if isinstance(schema, dict) else []
+    if isinstance(cols, list) and all(isinstance(c, str) for c in cols) and cols:
+        return cols
+    return ["mode", "session_id", "input_text", "response_text"]
+
+
+def _first_numbered_line(text: str) -> str:
+    for line in (text or "").splitlines():
+        if re.match(r"\s*\d+\.\s+", line):
+            return line.strip()
+    return ""
+
+
+def _project_mode_csv_row(
+    mode: str,
+    *,
+    session_id: str,
+    intention: str,
+    response_text: str,
+    tool_requested: str = "",
+    status: str = "ok",
+) -> dict[str, str]:
+    """Project chat state to a mode-aware CSV row.
+
+    V1 keeps projection minimal and deterministic.
+    """
+    base = {
+        "mode": mode,
+        "session_id": session_id,
+        "response_text": response_text,
+    }
+
+    if mode == "ask":
+        theme = " ".join(intention.split()[:6]).strip()
+        # Shared decision marker from the exchange (not strictly user-only).
+        decision = _first_numbered_line(response_text) or ""
+        base.update(
+            {
+                "theme": theme,
+                "question_ouverte": "1" if "?" in intention else "0",
+                "decision": decision,
+            }
+        )
+    elif mode == "search":
+        base.update(
+            {
+                "query": intention,
+                "result_summary": (response_text or "")[:160],
+                "source_count": (response_text or "").count("http"),
+            }
+        )
+    elif mode == "plan":
+        steps_count = len(re.findall(r"(?m)^\s*\d+\.\s+", response_text or ""))
+        base.update(
+            {
+                "goal": intention,
+                "steps_count": steps_count,
+                "next_action": _first_numbered_line(response_text),
+            }
+        )
+    elif mode == "agent":
+        status_map = {
+            "pending": "pending",
+            "input": "pending",
+            "in_progress": "in_progress",
+            "running": "in_progress",
+            "done": "done",
+            "ok": "done",
+            "success": "done",
+            "failed": "failed",
+            "error": "failed",
+            "blocked": "failed",
+        }
+        canonical_status = status_map.get((status or "").strip().lower(), "pending")
+        base.update(
+            {
+                "task": intention,
+                "tool_requested": tool_requested,
+                "status": canonical_status,
+            }
+        )
+    else:
+        base.update(
+            {
+                "input_text": intention,
+            }
+        )
+
+    return base
+
+
+def _build_mode_csv(
+    mode: str,
+    *,
+    session_id: str,
+    intention: str,
+    response_text: str,
+    tool_requested: str = "",
+    status: str = "ok",
+) -> str:
+    """Build CSV payload from mode schema with header-only safety fallback."""
+    columns = _mode_csv_columns(mode)
+    row = _project_mode_csv_row(
+        mode,
+        session_id=session_id,
+        intention=intention,
+        response_text=response_text,
+        tool_requested=tool_requested,
+        status=status,
+    )
+    if not columns:
+        return format_csv_header_only(["mode", "session_id", "input_text", "response_text"])
+    return format_csv_rows(columns, [row])
+
+
+def _persist_session_csv(mm: Any, key: str, csv_text: str) -> None:
+    """Store CSV snapshot in session_context."""
+    mm.query(
+        "session",
+        "INSERT OR REPLACE INTO session_context (key, value, ttl) VALUES (?, ?, NULL)",
+        (key, csv_text),
     )
 
 
@@ -1476,6 +1640,10 @@ def start() -> None:
     if startup_init.created:
         print(f"{T.MUTED}Initialized local workspace at {startup_init.arke_root}{T.RESET}")
 
+    codex_created = ensure_codex_files(startup_root, author="dev")
+    if codex_created:
+        print(f"{T.MUTED}Initialized Codex files in {startup_root}/.arke{T.RESET}")
+
     from arke.memory.manager import MemoryManager
     from arke.ui.banner import generate_banner
 
@@ -1564,6 +1732,7 @@ def start() -> None:
         import arke.router as router_mod
 
         intention = result.intention
+        current_mode = _get_mode()
         context: dict[str, Any] = {}
 
         if result.model_id:
@@ -1583,6 +1752,33 @@ def start() -> None:
         context["WORKSPACE_ROOT"] = os.environ.get("WORKSPACE_ROOT", os.getcwd())
         # Pass session ID for action logging (Phase 4)
         context["session_id"] = _session_id
+
+        # S051 V1: persist mode-aware CSV input snapshot before response generation.
+        try:
+            input_csv = _build_mode_csv(
+                current_mode,
+                session_id=_session_id,
+                intention=intention,
+                response_text="",
+                status="input",
+            )
+            _persist_session_csv(mm, "csv_last_input", input_csv)
+        except Exception:  # noqa: BLE001
+            pass
+
+        def _store_csv_output(response: str, *, tool_requested: str = "", status: str = "ok") -> None:
+            try:
+                output_csv = _build_mode_csv(
+                    current_mode,
+                    session_id=_session_id,
+                    intention=intention,
+                    response_text=response,
+                    tool_requested=tool_requested,
+                    status=status,
+                )
+                _persist_session_csv(mm, "csv_last_output", output_csv)
+            except Exception:  # noqa: BLE001
+                pass
 
         force_render_response = False
 
@@ -1644,12 +1840,14 @@ def start() -> None:
             print(f"{T.MUTED}- API overloaded or down{T.RESET}")
             print(f"{T.MUTED}- Network issue{T.RESET}")
             print(f"{T.MUTED}- Message too long for the model{T.RESET}")
+            _store_csv_output(f"Error: {exc}", status="error")
             history_append(mm, "user", intention, model_used=None)
             history_append(mm, "assistant", f"Error: {exc}", model_used=None)
             return
         except Exception as exc:
             print(f"\n{T.error()}Error contacting LLM{T.RESET}")
             print(f"{T.MUTED}Error: {exc}{T.RESET}")
+            _store_csv_output(f"Error: {exc}", status="error")
             history_append(mm, "user", intention, model_used=None)
             history_append(mm, "assistant", f"Error: {exc}", model_used=None)
             return
@@ -1697,6 +1895,7 @@ def start() -> None:
                     print(T.BORDER + "│" + T.RESET)
 
             history_append(mm, "user", intention, model_used=None)
+            _store_csv_output(response or "Réponse directe.", status="ok")
             history_append(mm, "assistant", response or "Réponse directe.", model_used=None)
             return
         
@@ -1723,6 +1922,7 @@ def start() -> None:
                         print(T.step_output(line))
                     print(T.BORDER + "│" + T.RESET)
                 history_append(mm, "user", intention, model_used=None)
+                _store_csv_output(response, tool_requested=str(_requested_tool or ""), status="blocked")
                 history_append(mm, "assistant", response, model_used=None)
                 return
 
@@ -1904,6 +2104,11 @@ def start() -> None:
             response_text = f"Échec : {tool_name}"
 
         history_append(mm, "user", intention, model_used=None)
+        _store_csv_output(
+            response_text,
+            tool_requested=str(agent_decision.get("tool") or ""),
+            status="ok" if task.status == StepStatus.SUCCESS else "failed",
+        )
         history_append(mm, "arke", response_text, model_used=result.model_id)
 
         # --- Cognitive continuity: record exchange + trigger extraction ---
@@ -2014,6 +2219,9 @@ def start() -> None:
 
             elif cmd == "/memory":
                 _print_memory(mm)
+
+            elif cmd == "/codex":
+                _handle_codex_command(raw)
 
             elif cmd == "/about":
                 _print_about()
@@ -2380,6 +2588,61 @@ Génère maintenant le JSON pour ces patterns:"""
     except Exception as exc:
         print(f"{T.ERROR}✗ Skill generation error: {str(exc)}{T.RESET}")
         log.warning("skill_generation_error", error=str(exc))
+
+
+def _handle_codex_command(raw: str) -> None:
+    """Handle /codex commands.
+
+    Supported forms:
+    - /codex
+    - /codex ask
+    - /codex opt
+    - /codex ask edit <section> <text>
+    - /codex opt edit <section> <text>
+    """
+    from arke import chat_theme as T
+
+    workspace_root = os.environ.get("WORKSPACE_ROOT", os.getcwd())
+    parts = raw.strip().split(maxsplit=4)
+
+    if len(parts) == 1:
+        print()
+        print(render_codex_summary(workspace_root))
+        return
+
+    target = parts[1].lower()
+    if target not in {"ask", "opt"}:
+        print(f"{T.MUTED}Usage: /codex [ask|opt] [edit <section> <texte>]{T.RESET}")
+        return
+
+    if len(parts) >= 3 and parts[2].lower() == "edit":
+        if len(parts) < 5:
+            print(
+                f"{T.MUTED}Usage: /codex {target} edit <section> <texte>. "
+                f"Ex: /codex {target} edit nomos \"Toujours valider avant merge.\"{T.RESET}"
+            )
+            return
+
+        section = parts[3].strip().lower()
+        entry = parts[4].strip().strip('"').strip("'")
+        try:
+            append_codex_entry(kind=target, workspace_root=workspace_root, section=section, entry=entry)
+        except Exception as exc:  # noqa: BLE001
+            print(f"{T.ERROR}Échec édition Codex: {exc}{T.RESET}")
+            return
+
+        print(f"{T.SUCCESS}✓{T.RESET} Entrée ajoutée à codex_{target}.yaml [{section}].")
+        return
+
+    try:
+        content = read_codex_text(kind=target, workspace_root=workspace_root)
+    except Exception as exc:  # noqa: BLE001
+        print(f"{T.ERROR}Impossible de lire codex_{target}.yaml: {exc}{T.RESET}")
+        return
+
+    print()
+    print(content.rstrip())
+    print()
 
 
 def _print_help() -> None:

@@ -14,6 +14,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from arke.codex.manager import get_codex_for_mode
+
 # ---------------------------------------------------------------------------
 # Constantes
 # ---------------------------------------------------------------------------
@@ -179,6 +181,16 @@ def build_input_context(
     # Fusionner avec le schéma du mode (le schéma enrichit le contexte)
     if schema:
         context.update(schema)
+
+    # Injection mode-aware du Codex local (.arke/codex_*.yaml).
+    # Non bloquant: en cas d'erreur de lecture/validation, on continue sans Codex.
+    if workspace_root:
+        try:
+            codex_context = get_codex_for_mode(mode=mode, workspace_root=workspace_root)
+            if codex_context:
+                context["codex"] = codex_context
+        except Exception:
+            pass
 
     # Toujours exposer le mode en tête pour la lisibilité LLM
     context["runtime"]["mode"] = mode

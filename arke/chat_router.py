@@ -46,6 +46,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/check":  "Vérifie l'état de chaque composant (providers, bwrap, sqlite-vec, OTel)",
     "/model":  "Sélecteur de modèle LLM interactif",
     "/memory": "Affiche les notes mémorisées de la session",
+    "/codex": "Affiche/édite le Codex workspace (/codex ask|opt [edit])",
     "/about":  "À propos d'Arke (architecture, philosophie)",
     "/workspace": "Gère les workspaces (.arke): list, select, sync",
     "/clear":  "Efface l'historique de session",
