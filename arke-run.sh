@@ -15,5 +15,8 @@ fi
 # Changer dans le répertoire du projet
 cd "${ARKE_ROOT}"
 
+# Performance: prevent 25s HTTP call on litellm import (github model cost map fetch)
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+
 # Utiliser directement l'exécutable arke du venv (déjà configuré par pip install -e)
 exec "${ARKE_ROOT}/.venv/bin/python3" -m arke.cli "$@"

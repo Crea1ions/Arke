@@ -11,11 +11,30 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import structlog
+import litellm  # eager — must be fully loaded before any threads start (prevents thread_extractor race condition)
+import logging
+logging.getLogger("litellm").setLevel(logging.ERROR)  # suppress non-blocking warnings
+
+# Force IPv4-first DNS resolution.
+# api.mistral.ai returns both A (IPv4) and AAAA (IPv6) records. On this machine,
+# TCP SYN to the IPv6 address is silently dropped by the remote (no SYN-ACK),
+# causing the Linux kernel to retry for ~127s before giving up. Reordering
+# getaddrinfo results to put AF_INET first bypasses this without disabling IPv6
+# globally (/etc/gai.conf would be the system-level alternative).
+_orig_getaddrinfo = socket.getaddrinfo
+
+def _ipv4_preferred_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # type: ignore[override]
+    results = _orig_getaddrinfo(host, port, family, type, proto, flags)
+    ipv4 = [r for r in results if r[0] == socket.AF_INET]
+    return ipv4 + [r for r in results if r[0] != socket.AF_INET]
+
+socket.getaddrinfo = _ipv4_preferred_getaddrinfo  # type: ignore[assignment]
 
 log = structlog.get_logger()
 
@@ -125,10 +144,6 @@ class LiteLLMManager:
     def _call_provider(
         self, provider_key: str, prompt: str, max_tokens: int
     ) -> tuple[str, float, int]:
-        import litellm  # lazy import
-        import logging
-        logging.getLogger("litellm").setLevel(logging.ERROR)  # Suppress non-blocking warnings
-
         model_cfg = self._config.get("models", {}).get(provider_key, {})
         model_name: str = model_cfg.get("model", provider_key)
         base_url: str | None = model_cfg.get("base_url")
@@ -245,10 +260,6 @@ class LiteLLMManager:
         self, provider_key: str, prompt: str, max_tokens: int
     ):
         """Stream tokens from a specific provider."""
-        import litellm  # lazy import
-        import logging
-        logging.getLogger("litellm").setLevel(logging.ERROR)  # Suppress non-blocking warnings
-
         model_cfg = self._config.get("models", {}).get(provider_key, {})
         model_name: str = model_cfg.get("model", provider_key)
         base_url: str | None = model_cfg.get("base_url")
