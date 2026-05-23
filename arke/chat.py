@@ -56,7 +56,12 @@ from arke.tool_registry import TOOL_REGISTRY
 from arke.thread_extractor import extract_async
 from arke.social_orchestrator import SocialOrchestrator
 from arke.session.state_manager import SessionStateManager
-from arke.cognitive_initiative_gate import cognitive_initiative_engine, mark_initiative_accepted, detect_positive_signal
+from arke.cognitive_initiative_gate import (
+    cognitive_initiative_engine,
+    mark_initiative_accepted,
+    mark_initiative_delivered,
+    detect_positive_signal,
+)
 from arke.mode_manager import (
     get_mode as _get_mode,
     set_mode as _set_mode,
@@ -1377,7 +1382,12 @@ def _ask_agent(
     # Build mode-dependent tool instruction (Bug 2: suppress pre-tool narration in search/agent)
     _current_mode = _get_mode()
     _is_action_mode = _current_mode in ("search", "agent")
+    _is_ask_mode = _current_mode == "ask"
     _tool_instruction = (
+        "MODE /ask (lecture seule): n'utilise jamais d'outil et n'écris jamais de balises [OUTIL:] ou [ARGS:]. "
+        "Réponds directement en texte naturel."
+        if _is_ask_mode
+        else (
         "RÈGLE ABSOLUE : Si tu dois utiliser un outil, ton PREMIER TOKEN doit être `[OUTIL:`. "
         "Aucun texte avant — ni phrase, ni bloc ```markdown, ni introduction, ni plan. "
         "Commence DIRECTEMENT par `[OUTIL: nom]` puis `[ARGS: {...}]`. "
@@ -1386,9 +1396,12 @@ def _ask_agent(
         else (
             "Si tu dois utiliser un outil (cli, fs, sqlite, mcp), "
             "termine ta réponse par:\n[OUTIL: nom_de_outil]\n[ARGS: arguments_en_json]"
-        )
+        ))
     )
     _planning_instruction = (
+        "En mode /ask, ne planifie pas d'actions ni d'outils. Reste analytique, concis, et concret."
+        if _is_ask_mode
+        else (
         "Si un outil est nécessaire, commence DIRECTEMENT par `[OUTIL:]` et `[ARGS:]`. "
         "Zéro texte avant — pas de phrase d'introduction, pas de bloc code, pas de plan. "
         "La synthèse vient APRÈS l'exécution, jamais avant."
@@ -1396,7 +1409,15 @@ def _ask_agent(
         else (
             "Si un outil est nécessaire, réponds en Markdown naturel puis ajoute seulement les balises [OUTIL:] et [ARGS:] à la fin.\n"
             "Si tu n'as pas besoin d'outil, réponds normalement sans balises."
-        )
+        ))
+    )
+
+    _ask_style_guard = (
+        "MODE /ask — posture:\n"
+        "Tu examines, tu doutes, tu dialogues. Tu ne tiens rien pour acquis. "
+        "Tu n'imposes pas, tu échanges. Tu es l'espace du questionnement et de la parole partagée."
+        if _is_ask_mode
+        else ""
     )
 
     # Build the system prompt
@@ -1404,6 +1425,7 @@ def _ask_agent(
         "Tu es Arke, un agent cognitif autonome.\n\n"
         "## Format de réponse\n"
         "Réponds en Markdown naturel, de façon conversationnelle et concise.\n\n"
+        f"{_ask_style_guard}\n\n"
         f"{_tool_instruction}\n\n"
         "Exemples :\n"
         "[OUTIL: cli]\n"
@@ -1672,6 +1694,8 @@ def start() -> None:
     _social_orchestrator.start()
     _cancel_extraction = [None]  # type: list[threading.Event | None]
     _last_cig = [None, ""]  # type: list  # [log_id: str|None, initiative_text: str]
+    _pending_cig = [None]  # type: list[tuple[str, str] | None]
+    _pending_cig_lock = threading.Lock()
     _set_mode("ask")  # Always start fresh in ask mode
 
     # Load persistent initiative user preference
@@ -1785,6 +1809,36 @@ def start() -> None:
             except Exception:  # noqa: BLE001
                 pass
 
+        def _post_exchange_cognitive(intention_text: str, response_text: str) -> None:
+            """Record exchange and run cognitive continuity hooks for this turn."""
+            depth_score = min((len(intention_text) + len(response_text)) / 2000.0, 1.0)
+            _social_orchestrator.record_exchange(depth_score)
+
+            # Cancel previous extraction if still pending, start fresh.
+            if _cancel_extraction[0] is not None:
+                _cancel_extraction[0].set()
+            import threading as _threading
+
+            _cancel_extraction[0] = _threading.Event()
+            extract_async(mm, _session_id, intention_text, response_text, _cancel_extraction[0])
+
+            # Run CIG asynchronously so response latency is not impacted.
+            def _run_cig_async() -> None:
+                try:
+                    _cig_text, _cig_log_id = cognitive_initiative_engine(
+                        mm,
+                        {"intention": intention_text, "response": response_text},
+                        paused=not _social_orchestrator._enabled,
+                    )
+                except Exception:  # noqa: BLE001
+                    return
+                if not _cig_text:
+                    return
+                with _pending_cig_lock:
+                    _pending_cig[0] = (_cig_text, _cig_log_id or "")
+
+            _threading.Thread(target=_run_cig_async, daemon=True, name="arke-cig").start()
+
         force_render_response = False
 
         # Resolve alias early — needed for the agent header printed before streaming.
@@ -1847,14 +1901,14 @@ def start() -> None:
             print(f"{T.MUTED}- Message too long for the model{T.RESET}")
             _store_csv_output(f"Error: {exc}", status="error")
             history_append(mm, "user", intention, model_used=None)
-            history_append(mm, "assistant", f"Error: {exc}", model_used=None)
+            history_append(mm, "arke", f"Error: {exc}", model_used=None)
             return
         except Exception as exc:
             print(f"\n{T.error()}Error contacting LLM{T.RESET}")
             print(f"{T.MUTED}Error: {exc}{T.RESET}")
             _store_csv_output(f"Error: {exc}", status="error")
             history_append(mm, "user", intention, model_used=None)
-            history_append(mm, "assistant", f"Error: {exc}", model_used=None)
+            history_append(mm, "arke", f"Error: {exc}", model_used=None)
             return
 
         agent_decision, force_render_response = _apply_introspection_guard(
@@ -1901,7 +1955,8 @@ def start() -> None:
 
             history_append(mm, "user", intention, model_used=None)
             _store_csv_output(response or "Réponse directe.", status="ok")
-            history_append(mm, "assistant", response or "Réponse directe.", model_used=None)
+            history_append(mm, "arke", response or "Réponse directe.", model_used=None)
+            _post_exchange_cognitive(intention, response or "")
             return
         
         # Agent wants to use a tool; pass decision to orchestrator
@@ -1928,7 +1983,8 @@ def start() -> None:
                     print(T.BORDER + "│" + T.RESET)
                 history_append(mm, "user", intention, model_used=None)
                 _store_csv_output(response, tool_requested=str(_requested_tool or ""), status="blocked")
-                history_append(mm, "assistant", response, model_used=None)
+                history_append(mm, "arke", response, model_used=None)
+                _post_exchange_cognitive(intention, response)
                 return
 
         context["agent_decision"] = agent_decision
@@ -2115,27 +2171,7 @@ def start() -> None:
             status="ok" if task.status == StepStatus.SUCCESS else "failed",
         )
         history_append(mm, "arke", response_text, model_used=result.model_id)
-
-        # --- Cognitive continuity: record exchange + trigger extraction ---
-        depth_score = min((len(intention) + len(response_text)) / 2000.0, 1.0)
-        _social_orchestrator.record_exchange(depth_score)
-        # Cancel previous extraction if still pending, start fresh
-        if _cancel_extraction[0] is not None:
-            _cancel_extraction[0].set()
-        import threading as _threading
-        _cancel_extraction[0] = _threading.Event()
-        extract_async(mm, _session_id, intention, response_text, _cancel_extraction[0])
-
-        # --- Cognitive Initiative Gate: soft thread reactivation (Phase 1) ---
-        _cig_text, _cig_log_id = cognitive_initiative_engine(
-            mm,
-            {"intention": intention, "response": response_text},
-            paused=not _social_orchestrator._enabled,
-        )
-        if _cig_text:
-            print(T.initiative_block(_cig_text))
-            _last_cig[0] = _cig_log_id
-            _last_cig[1] = _cig_text
+        _post_exchange_cognitive(intention, response_text)
 
     # -----------------------------------------------------------------------
     # REPL loop
@@ -2144,10 +2180,21 @@ def start() -> None:
     while True:
         try:
             _refresh_prompt_mode_badge()
-            # Signal any pending extraction to abort (user is active)
+            # Keep activity heartbeat for SocialOrchestrator timing.
             _social_orchestrator.record_input()
-            if _cancel_extraction[0] is not None:
-                _cancel_extraction[0].set()
+
+            # Deliver pending CIG initiative generated in background after the
+            # previous turn. This keeps generation out of the response path.
+            with _pending_cig_lock:
+                pending_cig = _pending_cig[0]
+                _pending_cig[0] = None
+            if pending_cig and _get_mode() == "ask" and _social_orchestrator._enabled:
+                cig_text, cig_log_id = pending_cig
+                print(T.initiative_block(cig_text))
+                if cig_log_id:
+                    mark_initiative_delivered(mm, cig_log_id)
+                _last_cig[0] = cig_log_id or None
+                _last_cig[1] = cig_text
 
             # Check for pending cognitive initiative (pull model, Phase 0: always None)
             if _social_orchestrator.has_pending_initiative():
@@ -2172,6 +2219,11 @@ def start() -> None:
         raw = raw.strip()
         if not raw:
             continue
+
+        # A real user turn just arrived: abort any pending extraction from the
+        # previous turn to prioritize current interaction.
+        if _cancel_extraction[0] is not None:
+            _cancel_extraction[0].set()
 
         # --- CIG feedback: detect positive engagement signal ---
         if _last_cig[0] is not None:

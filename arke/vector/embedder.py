@@ -113,6 +113,7 @@ class Embedder:
             )
 
         import litellm  # lazy import — not needed when disabled
+        litellm.suppress_debug_info = True
 
         response = litellm.embedding(model=self._model, input=[text])
         return response.data[0]["embedding"]

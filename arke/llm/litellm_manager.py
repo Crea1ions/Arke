@@ -20,6 +20,7 @@ import structlog
 import litellm  # eager — must be fully loaded before any threads start (prevents thread_extractor race condition)
 import logging
 logging.getLogger("litellm").setLevel(logging.ERROR)  # suppress non-blocking warnings
+litellm.suppress_debug_info = True
 
 # Force IPv4-first DNS resolution.
 # api.mistral.ai returns both A (IPv4) and AAAA (IPv6) records. On this machine,

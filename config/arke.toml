@@ -142,7 +142,7 @@ timeout = 30
 [social_orchestrator]
 enabled                    = true
 observation_mode           = false
-min_silence_minutes        = 30
+min_silence_minutes        = 5
 active_hours_start         = 8
 active_hours_end           = 23
 density_base_minutes       = 120

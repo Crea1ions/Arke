@@ -18,19 +18,47 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import re
+import threading
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import structlog
 
 from arke.enricher import ArkeEnricher
+from arke.logging.action_writer import log_action
+from arke.memory.hybrid_reranker import rerank_candidates
+from arke.memory.retrieval_orchestrator import (
+    load_hybrid_search_config,
+    rerank_memory_candidates_hybrid,
+)
 from arke.vector.embedder import Embedder, VectorDisabledError
 
 log = structlog.get_logger()
+
+
+def _log_cig_proof(action: str, details: dict[str, Any], rc: int = 0) -> None:
+    """Write CIG proof events to action logs for post-run diagnosis."""
+    workspace_root = Path(os.environ.get("WORKSPACE_ROOT", os.getcwd()))
+    logs_dir = workspace_root / ".arke" / "logs"
+    session_id = "cig"
+    try:
+        session_id = str(details.get("session_id") or "cig")
+    except Exception:  # noqa: BLE001
+        pass
+    log_action(
+        logs_dir=logs_dir,
+        session_id=session_id,
+        mode="ask",
+        tool="cig",
+        action=action,
+        rc=rc,
+        details=details,
+    )
 
 # ---------------------------------------------------------------------------
 # Config defaults
@@ -40,6 +68,11 @@ _DEFAULTS: dict = {
     "enabled": True,
     "threshold_density": 0.5,
     "reactivation_threshold": 0.65,
+    "allow_bootstrap_open_threads": True,
+    "session_link_min_age_days": 7,
+    "min_silence_minutes": None,
+    "initiative_cooldown_minutes": 8,
+    "activation_penalty": 0.08,
     "thread_max_age_days": 14,
     "auto_calibrate": True,
     "calibration_min_samples": 30,
@@ -195,6 +228,62 @@ def compute_interaction_density(mm: object) -> float:
     return 0.0
 
 
+def _resolve_min_silence_minutes(cfg: dict[str, Any]) -> float:
+    """Return effective silence window for CIG gate.
+
+    Priority:
+    1) [cognitive_initiative_gate].min_silence_minutes
+    2) [social_orchestrator].min_silence_minutes
+    3) default 5.0
+    """
+    value = cfg.get("min_silence_minutes")
+    if value is not None:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+
+    cfg_path = Path(__file__).parent.parent / "config" / "arke.toml"
+    try:
+        import tomllib
+
+        with open(cfg_path, "rb") as fh:
+            data = tomllib.load(fh)
+        so_value = data.get("social_orchestrator", {}).get("min_silence_minutes")
+        if so_value is not None:
+            return max(0.0, float(so_value))
+    except Exception:  # noqa: BLE001
+        pass
+
+    return 5.0
+
+
+def _seconds_between_last_two_user_turns(mm: object) -> float:
+    """Return gap in seconds between the two latest user turns.
+
+    Using user-turn spacing avoids false rejections caused by per-loop
+    heartbeat updates. If insufficient history is available, returns +inf.
+    """
+    try:
+        rows = mm.query(
+            "session",
+            "SELECT timestamp FROM chat_history "
+            "WHERE role = 'user' "
+            "ORDER BY id DESC LIMIT 2",
+            (),
+        )
+        if rows and len(rows) >= 2:
+            latest = str(_row_get(rows[0], "timestamp", "") or "")
+            previous = str(_row_get(rows[1], "timestamp", "") or "")
+            if latest and previous:
+                t1 = datetime.fromisoformat(latest)
+                t0 = datetime.fromisoformat(previous)
+                return max(0.0, (t1 - t0).total_seconds())
+    except Exception:  # noqa: BLE001
+        pass
+    return float("inf")
+
+
 def get_dormant_threads(mm: object, max_age_days: int) -> list[dict]:
     """Return dormant threads eligible for reactivation, ordered by score desc.
 
@@ -232,12 +321,405 @@ def get_dormant_threads(mm: object, max_age_days: int) -> list[dict]:
                 "id": r["id"],
                 "content": r["content"] or "",
                 "summary": r["summary"] or "",
+                "importance_score": float(r["importance_score"] or 0.0),
                 "reactivation_score": _apply_decay(score, days_dormant, decay_rate),
+                "status": "dormant",
+                "source": "dormant",
             })
         return result
     except Exception:  # noqa: BLE001
         pass
     return []
+
+
+def get_candidate_threads(
+    mm: object,
+    max_age_days: int,
+    allow_bootstrap_open_threads: bool,
+) -> list[dict]:
+    """Return candidate threads for CIG startup and steady-state reactivation.
+
+    Priority is given to dormant threads. When enabled, startup bootstrap also
+    includes open/resurfaced threads so CIG can initiate before a dormant state
+    transition exists.
+    """
+    candidates: list[dict] = []
+    seen_ids: set[int] = set()
+
+    dormant = get_dormant_threads(mm, max_age_days)
+    for t in dormant:
+        tid = int(t["id"])
+        seen_ids.add(tid)
+        candidates.append(t)
+
+    if not allow_bootstrap_open_threads:
+        return candidates
+
+    try:
+        rows = mm.query(
+            "global",
+            "SELECT id, content, summary, reactivation_score, importance_score, created_at, status "
+            "FROM cognitive_threads "
+            "WHERE status IN ('open', 'resurfaced') "
+            "  AND (reactivation_score > 0 OR importance_score > 0) "
+            "  AND (last_activated_at IS NULL "
+            "       OR last_activated_at >= date('now', ? ))",
+            (f"-{max_age_days} days",),
+        )
+    except Exception:  # noqa: BLE001
+        rows = []
+
+    cfg = _get_config()
+    decay_rate = cfg.get("decay_rate", 0.95)
+    today = date.today()
+    for r in rows:
+        tid = int(r["id"])
+        if tid in seen_ids:
+            continue
+
+        raw_score = float(r["reactivation_score"] or r["importance_score"] or 0.0)
+        created_raw = r["created_at"] or ""
+        days_dormant = 0
+        if created_raw:
+            try:
+                days_dormant = max(0, (today - date.fromisoformat(created_raw[:10])).days)
+            except ValueError:
+                pass
+
+        candidates.append(
+            {
+                "id": tid,
+                "content": r["content"] or "",
+                "summary": r["summary"] or "",
+                "importance_score": float(r["importance_score"] or 0.0),
+                "reactivation_score": _apply_decay(raw_score, days_dormant, decay_rate),
+                "status": r["status"] or "open",
+                "source": "bootstrap_open",
+            }
+        )
+
+    candidates.sort(key=lambda t: float(t.get("reactivation_score") or 0.0), reverse=True)
+    return candidates
+
+
+def _build_search_query(context: dict[str, Any]) -> str:
+    intention = str(context.get("intention") or "").strip()
+    response = str(context.get("response") or "").strip()
+    query = f"{intention} {response}".strip()
+    return query[:400]
+
+
+def _tokenize_query_for_lexical(query: str) -> list[str]:
+    words = [w for w in re.findall(r"[a-zàâäéèêëîïôùûüç]+", query.lower()) if len(w) >= 4]
+    seen: set[str] = set()
+    dedup: list[str] = []
+    for word in words:
+        if word in seen:
+            continue
+        seen.add(word)
+        dedup.append(word)
+    return dedup[:10]
+
+
+def _lexical_candidates_from_session(
+    mm: object,
+    search_query: str,
+    candidate_k: int,
+    min_age_days: int,
+) -> list[dict[str, Any]]:
+    """Fetch lexical candidates from session memory using FTS first, then SQL fallback."""
+    candidates: list[dict[str, Any]] = []
+    min_age_days = max(0, int(min_age_days))
+
+    try:
+        rows = mm.query(
+            "session",
+            """
+            SELECT c.id, c.role, c.content, c.timestamp, bm25(memory_fts) AS bm25_score
+            FROM memory_fts
+            JOIN chat_history c ON c.id = memory_fts.rowid
+            WHERE memory_fts MATCH ?
+              AND c.timestamp <= datetime('now', ?)
+            ORDER BY bm25(memory_fts)
+            LIMIT ?
+            """,
+            (search_query, f"-{min_age_days} days", candidate_k),
+        )
+        for row in rows:
+            entry = dict(row)
+            candidates.append(
+                {
+                    "id": entry.get("id"),
+                    "role": entry.get("role"),
+                    "timestamp": entry.get("timestamp"),
+                    "lexical_score": -float(entry.get("bm25_score", 0.0) or 0.0),
+                    "candidate_text": entry.get("content", ""),
+                    "content": entry.get("content", ""),
+                    "source": "session_fts",
+                }
+            )
+    except Exception:  # noqa: BLE001
+        candidates = []
+
+    if candidates:
+        return candidates
+
+    # Deterministic fallback when FTS is unavailable or yields nothing.
+    try:
+        rows = mm.query(
+            "session",
+            "SELECT id, role, content, timestamp FROM chat_history "
+            "WHERE role IN ('user', 'assistant') "
+            "  AND timestamp <= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT ?",
+            (f"-{min_age_days} days", max(candidate_k * 8, candidate_k)),
+        )
+    except Exception:  # noqa: BLE001
+        rows = []
+
+    tokens = _tokenize_query_for_lexical(search_query)
+    if not tokens:
+        return []
+
+    scored: list[dict[str, Any]] = []
+    for row in rows:
+        entry = dict(row)
+        content = str(entry.get("content") or "")
+        if not content:
+            continue
+        content_l = content.lower()
+        overlap = sum(1 for token in tokens if token in content_l)
+        if overlap <= 0:
+            continue
+        lexical_score = overlap / float(len(tokens))
+        scored.append(
+            {
+                "id": entry.get("id"),
+                "role": entry.get("role"),
+                "timestamp": entry.get("timestamp"),
+                "lexical_score": lexical_score,
+                "candidate_text": content,
+                "content": content,
+                "source": "session_sql",
+            }
+        )
+
+    scored.sort(key=lambda x: float(x.get("lexical_score") or 0.0), reverse=True)
+    return scored[:candidate_k]
+
+
+def _get_hybrid_context_candidates(mm: object, context: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return context-related candidates using S054 lexical prefilter + hybrid rerank."""
+    search_query = _build_search_query(context)
+    if not search_query:
+        return [], {
+            "semantic_applied": False,
+            "fallback_reason": "empty_query",
+            "candidate_k": 0,
+            "search_query": "",
+        }
+
+    cfg = load_hybrid_search_config()
+    cig_cfg = _get_config()
+    bounded_k = max(1, min(int(cfg.candidate_k), 20))
+    min_age_days = max(0, int(cig_cfg.get("session_link_min_age_days", 7)))
+    lexical_candidates = _lexical_candidates_from_session(mm, search_query, bounded_k, min_age_days)
+
+    result_box: dict[str, Any] = {}
+    error_box: dict[str, str] = {}
+
+    def _run_rerank() -> None:
+        try:
+            result_box["value"] = rerank_memory_candidates_hybrid(
+                search_query=search_query,
+                lexical_candidates=lexical_candidates,
+                limit=max(1, min(int(cfg.final_n), 5)),
+                config=cfg,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_box["type"] = type(exc).__name__
+
+    timeout_s = max(float(cfg.semantic_timeout_ms) / 1000.0, 0.05)
+    worker = threading.Thread(target=_run_rerank, daemon=True, name="cig-hybrid-rerank")
+    worker.start()
+    worker.join(timeout=timeout_s)
+
+    if worker.is_alive():
+        result = {
+            "results": lexical_candidates[: max(1, min(int(cfg.final_n), 5))],
+            "semantic_applied": False,
+            "fallback_reason": "outer_timeout",
+        }
+    elif "type" in error_box:
+        result = {
+            "results": lexical_candidates[: max(1, min(int(cfg.final_n), 5))],
+            "semantic_applied": False,
+            "fallback_reason": error_box["type"],
+        }
+    else:
+        result = result_box.get("value") or {
+            "results": lexical_candidates[: max(1, min(int(cfg.final_n), 5))],
+            "semantic_applied": False,
+            "fallback_reason": "empty_result",
+        }
+    ranked = result.get("results", []) or []
+
+    if ranked and not bool(result.get("semantic_applied", False)):
+        needs_fallback_normalization = any(cand.get("final_score") is None for cand in ranked)
+        if needs_fallback_normalization:
+            ranked = rerank_candidates(
+                ranked,
+                lexical_weight=1.0,
+                semantic_weight=0.0,
+                lexical_key="lexical_score",
+                semantic_key="semantic_score",
+            )
+
+    out: list[dict[str, Any]] = []
+    for cand in ranked:
+        source_id = f"chat:{cand.get('id')}"
+        text = str(cand.get("content") or cand.get("candidate_text") or "")
+        lexical_score = float(cand.get("lexical_score") or 0.0)
+        semantic_score = float(cand.get("semantic_score") or 0.0)
+        if "final_score" in cand and cand.get("final_score") is not None:
+            final_score = float(cand.get("final_score") or 0.0)
+        else:
+            # SQL fallback lexical_score is already normalized in [0, 1].
+            # FTS fallback uses inverted BM25, so clamp into a stable eligibility range.
+            final_score = lexical_score if lexical_score <= 1.0 else 1.0
+        out.append(
+            {
+                "id": source_id,
+                "source_id": source_id,
+                "content": text,
+                "summary": text[:120],
+                "reactivation_score": final_score,
+                "importance_score": final_score,
+                "effective_score": final_score,
+                "lexical_score": lexical_score,
+                "semantic_score": semantic_score,
+                "final_score": final_score,
+                "status": "session_candidate",
+                "source": str(cand.get("source") or "session"),
+                "timestamp": cand.get("timestamp"),
+            }
+        )
+
+    meta = {
+        "semantic_applied": bool(result.get("semantic_applied", False)),
+        "fallback_reason": result.get("fallback_reason"),
+        "candidate_k": bounded_k,
+        "session_link_min_age_days": min_age_days,
+        "search_query": search_query,
+    }
+    return out, meta
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _row_get(row: object, key: str, default: Any = None) -> Any:
+    """Return a value from dict-like rows and sqlite3.Row safely."""
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]  # type: ignore[index]
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _get_last_initiative_thread_id(mm: object) -> Optional[int]:
+    """Return the most recently generated initiative thread id if available."""
+    try:
+        rows = mm.query(
+            "global",
+            "SELECT thread_id FROM initiative_log "
+            "WHERE thread_id IS NOT NULL "
+            "ORDER BY timestamp DESC LIMIT 1",
+            (),
+        )
+        if rows and _row_get(rows[0], "thread_id") is not None:
+            raw = str(_row_get(rows[0], "thread_id"))
+            if raw.startswith("chat:"):
+                return None
+            return _safe_int(raw, default=-1)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _apply_exposure_penalties(
+    mm: object,
+    threads: list[dict],
+    cooldown_minutes: float,
+    activation_penalty: float,
+) -> list[dict]:
+    """Compute effective score with cooldown and exposure penalties.
+
+    Threads recently activated are downranked within cooldown window; repeated
+    activation_count also applies a bounded penalty to avoid the same thread
+    monopolizing initiatives.
+    """
+    if not threads:
+        return []
+
+    ids = [str(int(t["id"])) for t in threads if t.get("id") is not None]
+    if not ids:
+        return threads
+
+    placeholders = ",".join(["?"] * len(ids))
+    meta: dict[int, dict[str, Any]] = {}
+    try:
+        rows = mm.query(
+            "global",
+            "SELECT id, activation_count, last_activated_at FROM cognitive_threads "
+            f"WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+        for r in rows:
+            meta[_safe_int(r.get("id"), -1)] = {
+                "activation_count": _safe_int(r.get("activation_count"), 0),
+                "last_activated_at": r.get("last_activated_at"),
+            }
+    except Exception:  # noqa: BLE001
+        meta = {}
+
+    now = datetime.now()
+    out: list[dict] = []
+    cooldown_seconds = max(0.0, float(cooldown_minutes) * 60.0)
+    for t in threads:
+        tid = _safe_int(t.get("id"), -1)
+        m = meta.get(tid, {})
+        activation_count = _safe_int(m.get("activation_count"), 0)
+        base_score = float(t.get("reactivation_score") or 0.0)
+        penalty_count = min(0.35, max(0.0, float(activation_penalty)) * activation_count)
+
+        penalty_cooldown = 0.0
+        last_activated_raw = m.get("last_activated_at")
+        if last_activated_raw:
+            try:
+                last_ts = datetime.fromisoformat(str(last_activated_raw))
+                since = max(0.0, (now - last_ts).total_seconds())
+                if since < cooldown_seconds and cooldown_seconds > 0:
+                    # Strong temporary downrank during cooldown window.
+                    penalty_cooldown = 0.5 * (1.0 - (since / cooldown_seconds))
+            except ValueError:
+                pass
+
+        effective = max(0.0, base_score - penalty_count - penalty_cooldown)
+        item = dict(t)
+        item["activation_count"] = activation_count
+        item["effective_score"] = effective
+        out.append(item)
+
+    out.sort(key=lambda x: float(x.get("effective_score") or 0.0), reverse=True)
+    return out
 
 
 def get_divergent_thread(mm: object, max_age_days: int) -> Optional[dict]:
@@ -303,10 +785,15 @@ def generate_soft_reactivation(thread: dict, divergent: bool = False) -> str:
             f"⚡ Connexion inattendue : on avait une piste sur « {anchor} ». "
             "Rien à voir avec ce dont tu parles, mais ça me semble intéressant. Tu veux y revenir ?"
         )
-    return (
-        f"On avait exploré une piste sur « {anchor} » récemment. "
-        "Ça pourrait être lié à ce dont tu parles. Tu veux reprendre ?"
-    )
+    templates = [
+        "On avait exploré une piste sur « {anchor} » récemment. Ça pourrait être lié à ce dont tu parles. Tu veux reprendre ?",
+        "Je peux relancer un ancien fil autour de « {anchor} ». Tu veux qu'on l'approfondisse maintenant ?",
+        "Je repense à « {anchor} » dans notre historique. Tu préfères qu'on l'articule avec le sujet actuel ?",
+        "On peut rouvrir la piste « {anchor} » sous un angle différent. Tu veux tenter cette bifurcation ?",
+    ]
+    idx_seed = _safe_int(thread.get("id"), 0) + _safe_int(thread.get("activation_count"), 0)
+    tpl = templates[idx_seed % len(templates)]
+    return tpl.format(anchor=anchor)
 
 
 def log_initiative(
@@ -381,6 +868,37 @@ def mark_initiative_accepted(mm: object, log_id: str) -> None:
         log.debug("cig.mark_accepted_error", error=str(exc))
 
 
+def mark_initiative_delivered(mm: object, log_id: str) -> None:
+    """Mark initiative delivery and update thread lifecycle state.
+
+    Called when an initiative is actually shown in REPL, not only generated.
+    """
+    try:
+        rows = mm.query(
+            "global",
+            "SELECT thread_id FROM initiative_log WHERE id = ? LIMIT 1",
+            (log_id,),
+        )
+        if not rows or _row_get(rows[0], "thread_id") is None:
+            return
+
+        thread_id = _safe_int(_row_get(rows[0], "thread_id"), default=-1)
+        if thread_id < 0:
+            return
+
+        mm.query(
+            "global",
+            "UPDATE cognitive_threads SET "
+            "activation_count = activation_count + 1, "
+            "last_activated_at = datetime('now'), "
+            "status = 'resurfaced' "
+            "WHERE id = ?",
+            (thread_id,),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("cig.mark_delivered_error", error=str(exc), log_id=log_id)
+
+
 def detect_positive_signal(raw: str, initiative_text: str) -> bool:
     """Return True if user input `raw` shows engagement with the last initiative.
 
@@ -447,7 +965,8 @@ def _get_thread_raw(mm: object, thread_id: object) -> dict[str, Any]:
         rows = mm.query(
             "global",
             "SELECT id, content, summary, reactivation_score, importance_score, "
-            "created_at, tags, days_dormant, density_snapshot, context_anchor "
+            "created_at, tags, status, activation_count, ignored_count, last_activated_at, "
+            "thread_type, depth_score, relevance_score, relation_type, relation_evidence, extraction_confidence "
             "FROM cognitive_threads WHERE id = ? LIMIT 1",
             (str(thread_id),),
         )
@@ -479,11 +998,13 @@ def cognitive_initiative_engine(
     """
     # Gate 0: system-level pause (SocialOrchestrator._enabled = False)
     if paused:
+        _log_cig_proof("gate_reject", {"gate": "paused"})
         return None, None
 
     cfg = _get_config()
 
     if not cfg.get("enabled", True):
+        _log_cig_proof("gate_reject", {"gate": "disabled"})
         return None, None
 
     # Gate 1: interaction density
@@ -491,13 +1012,30 @@ def cognitive_initiative_engine(
     threshold = auto_calibrate_threshold(mm, cfg["threshold_density"])
     if density < threshold:
         log.debug("cig.rejected.density", density=density, threshold=threshold)
+        _log_cig_proof(
+            "gate_reject",
+            {
+                "gate": "density",
+                "density": round(float(density), 4),
+                "threshold": round(float(threshold), 4),
+            },
+        )
         return None, None
 
-    # Gate 2: dormant threads exist
-    threads = get_dormant_threads(mm, cfg["thread_max_age_days"])
-    eligible = [t for t in threads if t["reactivation_score"] >= cfg["reactivation_threshold"]]
-    if not eligible:
-        log.debug("cig.rejected.no_eligible_threads")
+    # Gate 1.5: minimal user silence before initiative attempt
+    min_silence_minutes = _resolve_min_silence_minutes(cfg)
+    elapsed_seconds = _seconds_between_last_two_user_turns(mm)
+    required_seconds = max(0.0, float(min_silence_minutes) * 60.0)
+    if elapsed_seconds < required_seconds:
+        _log_cig_proof(
+            "gate_reject",
+            {
+                "gate": "min_silence_not_met",
+                "elapsed_seconds": round(float(elapsed_seconds), 3),
+                "required_seconds": round(float(required_seconds), 3),
+                "min_silence_minutes": float(min_silence_minutes),
+            },
+        )
         return None, None
 
     # Divergence gate: with probability divergence_rate, skip contextual anchor
@@ -533,17 +1071,64 @@ def cognitive_initiative_engine(
             return text, log_id
         # No divergent thread available → fall through to normal contextual path
 
-    thread = eligible[0]  # highest reactivation_score (sorted by query)
+    # Gate 2: candidate memories from session lexical prefilter + hybrid rerank.
+    threads, retrieval_meta = _get_hybrid_context_candidates(mm, context)
+    eligible = [t for t in threads if float(t.get("effective_score") or 0.0) >= cfg["reactivation_threshold"]]
+    if not eligible:
+        log.debug("cig.rejected.no_eligible_threads")
+        source_counts: dict[str, int] = {}
+        for t in threads:
+            source = str(t.get("source") or "unknown")
+            source_counts[source] = source_counts.get(source, 0) + 1
+        _log_cig_proof(
+            "gate_reject",
+            {
+                "gate": "no_eligible_threads",
+                "candidate_threads": len(threads),
+                "source_counts": source_counts,
+                "reactivation_threshold": float(cfg["reactivation_threshold"]),
+                "semantic_applied": retrieval_meta.get("semantic_applied", False),
+                "fallback_reason": retrieval_meta.get("fallback_reason"),
+                "candidate_k": retrieval_meta.get("candidate_k", 0),
+            },
+        )
+        return None, None
 
-    # Rank eligible threads by composite utility score (Phase 2)
-    thread = max(
-        eligible,
-        key=lambda t: compute_utility_score(t, density),
-    )
+    # Rank eligible candidates by final hybrid score.
+    thread = max(eligible, key=lambda t: float(t.get("final_score") or t.get("effective_score") or 0.0))
+
+    # Guardrail: avoid immediate same-thread repetition when alternatives exist.
+    last_thread_id = _get_last_initiative_thread_id(mm)
+    current_id = str(thread.get("id") or "")
+    if last_thread_id is not None and _safe_int(thread.get("id"), -1) == last_thread_id:
+        alternatives = [t for t in eligible if _safe_int(t.get("id"), -1) != last_thread_id]
+        if alternatives:
+            thread = max(alternatives, key=lambda t: float(t.get("final_score") or t.get("effective_score") or 0.0))
+    elif current_id:
+        try:
+            rows = mm.query(
+                "global",
+                "SELECT thread_id FROM initiative_log WHERE thread_id IS NOT NULL "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (),
+            )
+        except Exception:  # noqa: BLE001
+            rows = []
+        last_source_id = str(_row_get(rows[0], "thread_id", "") or "") if rows else ""
+        alternatives = [t for t in eligible if str(t.get("id") or "") != last_source_id]
+        if alternatives:
+            thread = max(alternatives, key=lambda t: float(t.get("final_score") or t.get("effective_score") or 0.0))
 
     # Gate 3: contextual anchor
     if not is_contextually_anchored(thread, context):
         log.debug("cig.rejected.no_anchor", thread_id=thread["id"])
+        _log_cig_proof(
+            "gate_reject",
+            {
+                "gate": "no_anchor",
+                "thread_id": thread["id"],
+            },
+        )
         return None, None
 
     # All gates passed → generate
@@ -568,4 +1153,19 @@ def cognitive_initiative_engine(
         contract_version=enricher.validator.contract_version,
     )
     log.info("cig.initiative_generated", thread_id=thread["id"], density=density)
+    _log_cig_proof(
+        "initiative_generated",
+        {
+            "thread_id": thread["id"],
+            "thread_status": thread.get("status"),
+            "thread_source": thread.get("source"),
+            "selected_source_id": thread.get("source_id") or thread.get("id"),
+            "semantic_applied": retrieval_meta.get("semantic_applied", False),
+            "fallback_reason": retrieval_meta.get("fallback_reason"),
+            "effective_score": round(float(thread.get("effective_score") or thread.get("reactivation_score") or 0.0), 4),
+            "final_score": round(float(thread.get("final_score") or thread.get("effective_score") or 0.0), 4),
+            "density": round(float(density), 4),
+            "log_id": log_id,
+        },
+    )
     return text, log_id

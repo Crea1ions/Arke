@@ -29,6 +29,7 @@ from arke.cognitive_initiative_gate import (
     _DEFAULTS,
     _apply_decay,
     _cosine_similarity,
+    _get_hybrid_context_candidates,
     auto_calibrate_threshold,
     cognitive_initiative_engine,
     compute_interaction_density,
@@ -79,6 +80,13 @@ def _create_global_schema(conn: sqlite3.Connection) -> None:
             context_anchor TEXT,
             timestamp TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TEXT DEFAULT (datetime('now'))
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(content);
     """)
     conn.commit()
 
@@ -124,6 +132,30 @@ def _seed_dormant_thread(mm, reactivation_score: float = 0.8,
     )
     rows = mm.query("global", "SELECT last_insert_rowid() AS id", ())
     return rows[0]["id"]
+
+
+def _seed_session_message(mm, role: str, content: str) -> int:
+    mm.query(
+        "session",
+        "INSERT INTO chat_history (role, content) VALUES (?, ?)",
+        (role, content),
+    )
+    rows = mm.query("session", "SELECT last_insert_rowid() AS id", ())
+    row_id = int(rows[0]["id"])
+    mm.query("session", "INSERT INTO memory_fts(rowid, content) VALUES (?, ?)", (row_id, content))
+    return row_id
+
+
+def _seed_session_message_at(mm, role: str, content: str, days_old: int) -> int:
+    mm.query(
+        "session",
+        "INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, datetime('now', ?))",
+        (role, content, f"-{days_old} days"),
+    )
+    rows = mm.query("session", "SELECT last_insert_rowid() AS id", ())
+    row_id = int(rows[0]["id"])
+    mm.query("session", "INSERT INTO memory_fts(rowid, content) VALUES (?, ?)", (row_id, content))
+    return row_id
 
 
 # ---------------------------------------------------------------------------
@@ -188,14 +220,29 @@ class TestCigHappyPath:
     def test_initiative_generated_when_all_gates_pass(self, mm):
         """All gates pass → returns (str, str) with non-empty initiative text and log_id."""
         _seed_density(mm, 0.8)
-        _seed_dormant_thread(mm,
-                             content="problème connexion réseau timeout serveur",
-                             summary="bug réseau timeout")
         context = {
             "intention": "pourquoi la connexion réseau échoue",
             "response": "timeout détecté sur le serveur réseau",
         }
-        text, log_id = cognitive_initiative_engine(mm, context, paused=False)
+        with patch("arke.cognitive_initiative_gate._get_hybrid_context_candidates") as mock_candidates:
+            mock_candidates.return_value = (
+                [
+                    {
+                        "id": "chat:1",
+                        "source_id": "chat:1",
+                        "content": "problème connexion réseau timeout serveur",
+                        "summary": "bug réseau timeout",
+                        "reactivation_score": 0.92,
+                        "importance_score": 0.92,
+                        "effective_score": 0.92,
+                        "final_score": 0.92,
+                        "source": "session_sql",
+                        "status": "session_candidate",
+                    }
+                ],
+                {"semantic_applied": False, "fallback_reason": "test", "candidate_k": 1},
+            )
+            text, log_id = cognitive_initiative_engine(mm, context, paused=False)
         assert text is not None
         assert len(text) > 10
         assert log_id is not None
@@ -203,6 +250,138 @@ class TestCigHappyPath:
         rows = mm.query("global", "SELECT accepted FROM initiative_log WHERE id = ?", (log_id,))
         assert len(rows) == 1
         assert rows[0]["accepted"] is None  # NOT False — absence ≠ rejection
+
+    def test_initiative_logs_selected_source_and_semantic_flags(self, mm):
+        _seed_density(mm, 0.8)
+        context = {
+            "intention": "pourquoi la connexion réseau échoue",
+            "response": "timeout détecté sur le serveur réseau",
+        }
+        with patch("arke.cognitive_initiative_gate._get_hybrid_context_candidates") as mock_candidates, \
+             patch("arke.cognitive_initiative_gate._log_cig_proof") as mock_proof:
+            mock_candidates.return_value = (
+                [
+                    {
+                        "id": "chat:7",
+                        "source_id": "chat:7",
+                        "content": "problème connexion réseau timeout serveur",
+                        "summary": "bug réseau timeout",
+                        "reactivation_score": 0.88,
+                        "importance_score": 0.88,
+                        "effective_score": 0.88,
+                        "final_score": 0.88,
+                        "source": "session_fts",
+                        "status": "session_candidate",
+                    }
+                ],
+                {"semantic_applied": True, "fallback_reason": None, "candidate_k": 5},
+            )
+            text, log_id = cognitive_initiative_engine(mm, context, paused=False)
+
+        assert text is not None
+        assert log_id is not None
+        mock_proof.assert_any_call(
+            "initiative_generated",
+            {
+                "thread_id": "chat:7",
+                "thread_status": "session_candidate",
+                "thread_source": "session_fts",
+                "selected_source_id": "chat:7",
+                "semantic_applied": True,
+                "fallback_reason": None,
+                "effective_score": 0.88,
+                "final_score": 0.88,
+                "density": 0.8,
+                "log_id": log_id,
+            },
+        )
+
+
+class TestHybridContextCandidates:
+    def test_hybrid_candidates_fallback_to_lexical_on_timeout(self, mm):
+        _seed_session_message_at(mm, "user", "problème connexion réseau timeout serveur", days_old=8)
+        _seed_session_message_at(mm, "assistant", "ça ressemble à un bug réseau timeout", days_old=8)
+
+        with patch("arke.cognitive_initiative_gate.load_hybrid_search_config") as mock_cfg, \
+             patch("arke.cognitive_initiative_gate.rerank_memory_candidates_hybrid") as mock_rerank:
+            mock_cfg.return_value = type(
+                "Cfg",
+                (),
+                {
+                    "candidate_k": 20,
+                    "final_n": 5,
+                    "semantic_timeout_ms": 50,
+                    "enabled": True,
+                    "lexical_weight": 0.7,
+                    "semantic_weight": 0.3,
+                    "query_cache_enabled": True,
+                    "query_cache_ttl_sec": 3600,
+                },
+            )()
+
+            def _blocked_rerank(**kwargs):
+                import time
+                time.sleep(0.2)
+                return {"results": [], "semantic_applied": True, "fallback_reason": None}
+
+            mock_rerank.side_effect = _blocked_rerank
+            candidates, meta = _get_hybrid_context_candidates(
+                mm,
+                {"intention": "connexion réseau", "response": "timeout serveur"},
+            )
+
+        assert candidates
+        assert meta["semantic_applied"] is False
+        assert meta["fallback_reason"] == "outer_timeout"
+        assert meta["candidate_k"] == 20
+        assert float(candidates[0]["final_score"]) == pytest.approx(1.0)
+
+    def test_hybrid_candidates_ignore_recent_messages_and_keep_old_links(self, mm):
+        _seed_session_message_at(mm, "user", "problème connexion réseau timeout ancien", days_old=8)
+        _seed_session_message_at(mm, "assistant", "analyse timeout réseau ancien", days_old=8)
+        _seed_session_message_at(mm, "user", "problème connexion réseau timeout récent", days_old=2)
+        _seed_session_message_at(mm, "assistant", "analyse timeout réseau récente", days_old=2)
+
+        with patch("arke.cognitive_initiative_gate.load_hybrid_search_config") as mock_cfg, \
+             patch("arke.cognitive_initiative_gate.rerank_memory_candidates_hybrid") as mock_rerank, \
+             patch("arke.cognitive_initiative_gate._get_config") as mock_cig_cfg:
+            mock_cfg.return_value = type(
+                "Cfg",
+                (),
+                {
+                    "candidate_k": 20,
+                    "final_n": 5,
+                    "semantic_timeout_ms": 50,
+                    "enabled": False,
+                    "lexical_weight": 0.7,
+                    "semantic_weight": 0.3,
+                    "query_cache_enabled": True,
+                    "query_cache_ttl_sec": 3600,
+                },
+            )()
+            mock_cig_cfg.return_value = {**_DEFAULTS, "session_link_min_age_days": 7}
+            mock_rerank.return_value = {
+                "results": [
+                    {
+                        "id": 1,
+                        "content": "problème connexion réseau timeout ancien",
+                        "lexical_score": 0.8,
+                        "source": "session_sql",
+                    }
+                ],
+                "semantic_applied": False,
+                "fallback_reason": "hybrid_disabled",
+            }
+
+            candidates, meta = _get_hybrid_context_candidates(
+                mm,
+                {"intention": "connexion réseau timeout", "response": "serveur timeout"},
+            )
+
+        assert candidates
+        assert all("récent" not in str(candidate["content"]) for candidate in candidates)
+        assert any("ancien" in str(candidate["content"]) for candidate in candidates)
+        assert meta["session_link_min_age_days"] == 7
 
 
 # ---------------------------------------------------------------------------
@@ -605,24 +784,9 @@ class TestComputeUtilityScore:
         thread = {"reactivation_score": 0.0, "importance_score": 0.0}
         assert compute_utility_score(thread, density=0.0, weights=self._W) == pytest.approx(0.0)
 
-    def test_engine_selects_highest_utility_thread(self, mm):
-        """Engine must pick the thread with the highest utility, not simply highest reactivation."""
+    def test_engine_selects_highest_ranked_hybrid_candidate(self, mm):
+        """Engine must pick the highest final_score candidate from the hybrid retrieval path."""
         _seed_density(mm, 0.9)
-        # Thread A: high reactivation, low importance → moderate utility
-        mm.query(
-            "global",
-            "INSERT INTO cognitive_threads (content, summary, status, reactivation_score, importance_score)"
-            " VALUES (?, ?, 'dormant', ?, ?)",
-            ("réseau connexion timeout problème", "réseau timeout", 0.9, 0.1),
-        )
-        # Thread B: moderate reactivation, high importance → higher utility with default weights
-        mm.query(
-            "global",
-            "INSERT INTO cognitive_threads (content, summary, status, reactivation_score, importance_score)"
-            " VALUES (?, ?, 'dormant', ?, ?)",
-            ("réseau connexion timeout problème", "réseau timeout", 0.7, 0.95),
-        )
-        # w=0.4: A=0.4*0.9+0.3*0.1=0.39  B=0.4*0.7+0.3*0.95=0.565 → B wins
         with patch("arke.cognitive_initiative_gate._get_config") as mock_cfg:
             mock_cfg.return_value = {
                 **_DEFAULTS,
@@ -632,9 +796,41 @@ class TestComputeUtilityScore:
                 "utility_weights": {"reactivation": 0.4, "importance": 0.3,
                                     "density": 0.2, "relevance": 0.1},
             }
-            text, log_id = cognitive_initiative_engine(
-                mm,
-                {"intention": "réseau connexion timeout", "response": "timeout problème"},
-                paused=False,
-            )
+            with patch("arke.cognitive_initiative_gate._get_hybrid_context_candidates") as mock_candidates:
+                mock_candidates.return_value = (
+                    [
+                        {
+                            "id": "chat:1",
+                            "source_id": "chat:1",
+                            "content": "réseau connexion timeout problème candidate A",
+                            "summary": "candidate A",
+                            "reactivation_score": 0.71,
+                            "importance_score": 0.71,
+                            "effective_score": 0.71,
+                            "final_score": 0.71,
+                            "source": "session_sql",
+                            "status": "session_candidate",
+                        },
+                        {
+                            "id": "chat:2",
+                            "source_id": "chat:2",
+                            "content": "réseau connexion timeout problème candidate B",
+                            "summary": "candidate B",
+                            "reactivation_score": 0.93,
+                            "importance_score": 0.93,
+                            "effective_score": 0.93,
+                            "final_score": 0.93,
+                            "source": "session_sql",
+                            "status": "session_candidate",
+                        },
+                    ],
+                    {"semantic_applied": False, "fallback_reason": "test", "candidate_k": 2},
+                )
+                text, log_id = cognitive_initiative_engine(
+                    mm,
+                    {"intention": "réseau connexion timeout", "response": "timeout problème"},
+                    paused=False,
+                )
         assert text is not None
+        rows = mm.query("global", "SELECT thread_id FROM initiative_log WHERE id = ?", (log_id,))
+        assert rows[0]["thread_id"] == "chat:2"

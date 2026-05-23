@@ -18,11 +18,15 @@ to ensure the REPL is never interrupted.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
+from pathlib import Path
 
 import structlog
+
+from arke.logging.action_writer import log_action
 
 log = structlog.get_logger()
 
@@ -139,7 +143,30 @@ def extract_async(
         agent_response: The agent's full response text.
         cancel_event: Caller sets this to abort extraction before LLM call.
     """
-    if not should_extract(user_msg, agent_response):
+    workspace_root = Path(os.environ.get("WORKSPACE_ROOT", os.getcwd()))
+    logs_dir = workspace_root / ".arke" / "logs"
+
+    combined = (user_msg + " " + agent_response).lower()
+    has_min_len = len(combined) >= EXTRACTION_MIN_CHARS
+    has_marker = any(marker in combined for marker in _COGNITIVE_MARKERS)
+    eligible = has_min_len and has_marker
+
+    log_action(
+        logs_dir=logs_dir,
+        session_id=session_id,
+        mode="ask",
+        tool="thread_extractor",
+        action="extract_eval",
+        rc=0,
+        details={
+            "eligible": eligible,
+            "combined_len": len(combined),
+            "min_chars": EXTRACTION_MIN_CHARS,
+            "has_marker": has_marker,
+        },
+    )
+
+    if not eligible:
         return
 
     t = threading.Thread(
@@ -149,6 +176,16 @@ def extract_async(
         name="arke-thread-extractor",
     )
     t.start()
+
+    log_action(
+        logs_dir=logs_dir,
+        session_id=session_id,
+        mode="ask",
+        tool="thread_extractor",
+        action="extract_spawn",
+        rc=0,
+        details={"cancel_grace_seconds": CANCEL_GRACE_SECONDS},
+    )
     return t
 
 
@@ -166,10 +203,22 @@ def _extraction_worker(
 ) -> None:
     """Background worker. Aborts silently on cancel or any error."""
     try:
+        workspace_root = Path(os.environ.get("WORKSPACE_ROOT", os.getcwd()))
+        logs_dir = workspace_root / ".arke" / "logs"
+
         # Courtesy pause: let the user start reading the response
         for _ in range(int(CANCEL_GRACE_SECONDS * 10)):
             if cancel_event.is_set():
                 log.debug("thread_extractor.cancelled", session_id=session_id)
+                log_action(
+                    logs_dir=logs_dir,
+                    session_id=session_id,
+                    mode="ask",
+                    tool="thread_extractor",
+                    action="extract_cancelled",
+                    rc=0,
+                    details={"phase": "grace_period"},
+                )
                 return
             time.sleep(0.1)
 
@@ -185,116 +234,197 @@ def _extraction_worker(
             max_tokens=400,
         )
 
-        threads = _parse_threads(response_text)
+        threads, parse_diag = _parse_threads_with_diagnostics(response_text)
         if not threads:
+            preview = response_text.replace("\n", " ").strip()[:240]
+            log_action(
+                logs_dir=logs_dir,
+                session_id=session_id,
+                mode="ask",
+                tool="thread_extractor",
+                action="extract_empty",
+                rc=0,
+                details={
+                    "llm_response_len": len(response_text),
+                    "llm_response_preview": preview,
+                    "parse_reason": parse_diag.get("reason"),
+                    "parse_candidates": parse_diag.get("candidates", 0),
+                    "parse_valid_items": parse_diag.get("valid_items", 0),
+                },
+            )
             return
 
-        _store_threads(mm, session_id, threads, user_msg, agent_response)
+        inserted = _store_threads(mm, session_id, threads, user_msg, agent_response)
+        log_action(
+            logs_dir=logs_dir,
+            session_id=session_id,
+            mode="ask",
+            tool="thread_extractor",
+            action="extract_store",
+            rc=0,
+            details={"parsed": len(threads), "inserted": inserted},
+        )
 
     except Exception as exc:  # noqa: BLE001 — never interrupt the REPL
         log.warning("thread_extractor.error", error=str(exc), exc_type=type(exc).__name__)
+        workspace_root = Path(os.environ.get("WORKSPACE_ROOT", os.getcwd()))
+        logs_dir = workspace_root / ".arke" / "logs"
+        log_action(
+            logs_dir=logs_dir,
+            session_id=session_id,
+            mode="ask",
+            tool="thread_extractor",
+            action="extract_error",
+            rc=1,
+            details={"error": str(exc), "exc_type": type(exc).__name__},
+        )
 
 
 def _parse_threads(raw: str) -> list[dict]:
-    """Parse the LLM JSON response into a list of thread dicts (v1.1).
-    
-    Validates and normalizes:
-    - Scores: importance, depth, relevance, confidence (clamped to [0, 1])
-    - thread_type: must be in {primary, sub_theme, example, question}
-    - tags: must be in the closed taxonomy (12 valid tags)
-    - relation_type: must be in {elaboration, contrast, example_of, question_followup}
-    - related_thread_index: integer or null
-    
-    All new fields default gracefully if missing.
+    """Compatibility wrapper: parse and return normalized thread list only."""
+    threads, _diag = _parse_threads_with_diagnostics(raw)
+    return threads
+
+
+def _parse_threads_with_diagnostics(raw: str) -> tuple[list[dict], dict]:
+    """Parse LLM JSON response into normalized threads with diagnostics.
+
+    This parser is intentionally tolerant: malformed items are skipped, not fatal.
     """
     # Strip markdown code fences if present
     cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
-    try:
-        data = json.loads(cleaned)
-        if not isinstance(data, list):
-            return []
-        
-        # Valid enums
-        valid_types = {"primary", "sub_theme", "example", "question"}
-        valid_tags = {
-            "philosophie", "science", "éthique", "architecture", "méthode",
-            "question", "hypothèse", "paradoxe", "métaphore", "histoire",
-            "technique", "exploration"
-        }
-        valid_relations = {"elaboration", "contrast", "example_of", "question_followup"}
-        
-        result = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            
-            # Extract and validate content
-            content = str(item.get("content", "")).strip()
-            if not content:
-                continue
-            
-            # Clamp all scores to [0, 1]
-            importance = float(item.get("importance_score", 0.5))
-            importance = max(0.0, min(1.0, importance))
-            
-            depth = float(item.get("depth_score", 0.5))
-            depth = max(0.0, min(1.0, depth))
-            
-            relevance = float(item.get("relevance_score", 0.5))
-            relevance = max(0.0, min(1.0, relevance))
-            
-            confidence = float(item.get("extraction_confidence", 0.5))
-            confidence = max(0.0, min(1.0, confidence))
-            
-            # Validate thread_type
-            thread_type = item.get("thread_type", "primary")
-            if thread_type not in valid_types:
-                thread_type = "primary"
-            
-            # Validate and filter tags
-            raw_tags = item.get("tags", [])
-            if not isinstance(raw_tags, list):
-                raw_tags = []
-            tags = [t for t in raw_tags if t in valid_tags]
-            
-            # Validate related_thread_index
-            related_idx = item.get("related_thread_index")
-            if related_idx is not None:
-                try:
-                    related_idx = int(related_idx)
-                except (ValueError, TypeError):
-                    related_idx = None
-            
-            # Validate relation_type
-            relation_type = item.get("relation_type")
-            if relation_type not in valid_relations:
-                relation_type = None
-            
-            # If related_idx is set but relation_type is missing, log warning
-            if related_idx is not None and relation_type is None:
-                log.warning("thread_extractor.relation_type_missing", related_idx=related_idx)
-            
-            # Extract relation_evidence
-            relation_evidence = item.get("relation_evidence")
-            if relation_evidence is not None:
-                relation_evidence = str(relation_evidence).strip()[:500]  # Limit to 500 chars
-            
-            result.append({
-                "content": content,
-                "importance_score": importance,
-                "depth_score": depth,
-                "relevance_score": relevance,
-                "thread_type": thread_type,
-                "tags": json.dumps(tags),
-                "related_thread_index": related_idx,
-                "relation_type": relation_type,
-                "relation_evidence": relation_evidence,
-                "extraction_confidence": confidence,
-            })
-        
-        return result
-    except (json.JSONDecodeError, ValueError):
-        return []
+
+    def _loads_payload(text: str):
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    # Best effort recovery for imperfect model outputs.
+    # 1) direct parse
+    # 2) first JSON array substring [...]
+    # 3) first JSON object substring {...}, then read key "threads" if present
+    data = _loads_payload(cleaned)
+    parse_path = "direct"
+    if data is None:
+        arr_match = re.search(r"\[[\s\S]*\]", cleaned)
+        if arr_match:
+            data = _loads_payload(arr_match.group(0))
+            parse_path = "array_substring"
+
+    if data is None:
+        obj_match = re.search(r"\{[\s\S]*\}", cleaned)
+        if obj_match:
+            obj = _loads_payload(obj_match.group(0))
+            if isinstance(obj, dict) and isinstance(obj.get("threads"), list):
+                data = obj.get("threads")
+                parse_path = "object_threads_key"
+
+    # 4) recover individual JSON objects from malformed arrays/text
+    candidates: list[dict] = []
+    if data is None:
+        for block in re.findall(r"\{[^{}]*\}", cleaned):
+            item = _loads_payload(block)
+            if isinstance(item, dict):
+                candidates.append(item)
+        if candidates:
+            data = candidates
+            parse_path = "object_recovery"
+
+    if not isinstance(data, list):
+        return [], {"reason": "invalid_payload_shape", "candidates": 0, "valid_items": 0, "parse_path": parse_path}
+
+    # Valid enums
+    valid_types = {"primary", "sub_theme", "example", "question"}
+    valid_tags = {
+        "philosophie", "science", "éthique", "architecture", "méthode",
+        "question", "hypothèse", "paradoxe", "métaphore", "histoire",
+        "technique", "exploration"
+    }
+    valid_relations = {"elaboration", "contrast", "example_of", "question_followup"}
+
+    def _clamped_float(value: object, default: float = 0.5) -> float:
+        try:
+            num = float(value)
+        except (ValueError, TypeError):
+            num = default
+        return max(0.0, min(1.0, num))
+
+    result = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        # Extract and validate content; fallback to common aliases
+        raw_content = item.get("content")
+        if raw_content is None:
+            raw_content = item.get("thread")
+        if raw_content is None:
+            raw_content = item.get("idea")
+        content = str(raw_content or "").strip()
+        if not content:
+            continue
+
+        # Clamp all scores to [0, 1], never fail the whole batch.
+        importance = _clamped_float(item.get("importance_score", item.get("importance", 0.5)))
+        depth = _clamped_float(item.get("depth_score", item.get("depth", 0.5)))
+        relevance = _clamped_float(item.get("relevance_score", item.get("relevance", 0.5)))
+        confidence = _clamped_float(item.get("extraction_confidence", item.get("confidence", 0.5)))
+
+        # Validate thread_type
+        thread_type = item.get("thread_type", "primary")
+        if thread_type not in valid_types:
+            thread_type = "primary"
+
+        # Validate and filter tags
+        raw_tags = item.get("tags", [])
+        if isinstance(raw_tags, str):
+            raw_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        if not isinstance(raw_tags, list):
+            raw_tags = []
+        tags = [str(t) for t in raw_tags if str(t) in valid_tags]
+
+        # Validate related_thread_index
+        related_idx = item.get("related_thread_index")
+        if related_idx is not None:
+            try:
+                related_idx = int(related_idx)
+            except (ValueError, TypeError):
+                related_idx = None
+
+        # Validate relation_type
+        relation_type = item.get("relation_type")
+        if relation_type not in valid_relations:
+            relation_type = None
+
+        # If related_idx is set but relation_type is missing, keep relation index but flag warning
+        if related_idx is not None and relation_type is None:
+            log.warning("thread_extractor.relation_type_missing", related_idx=related_idx)
+
+        relation_evidence = item.get("relation_evidence")
+        if relation_evidence is not None:
+            relation_evidence = str(relation_evidence).strip()[:500]
+
+        result.append({
+            "content": content,
+            "importance_score": importance,
+            "depth_score": depth,
+            "relevance_score": relevance,
+            "thread_type": thread_type,
+            "tags": json.dumps(tags),
+            "related_thread_index": related_idx,
+            "relation_type": relation_type,
+            "relation_evidence": relation_evidence,
+            "extraction_confidence": confidence,
+        })
+
+    reason = "ok" if result else "no_valid_items"
+    return result, {
+        "reason": reason,
+        "candidates": len(data),
+        "valid_items": len(result),
+        "parse_path": parse_path,
+    }
 
 
 def _store_threads(
@@ -303,7 +433,7 @@ def _store_threads(
     threads: list[dict],
     user_msg: str,
     agent_response: str,
-) -> None:
+) -> int:
     """Write extracted threads to global.db under the module lock (v1.1).
     
     Two-pass approach:
@@ -311,6 +441,7 @@ def _store_threads(
     2. Resolve references: for threads with related_thread_index, 
        fetch the target thread ID and update related_thread_id
     """
+    inserted_count = 0
     with threads_lock:
         inserted_ids: list[int] = []
         
@@ -346,6 +477,7 @@ def _store_threads(
                     confidence=t["extraction_confidence"],
                     preview=t["content"][:60],
                 )
+                inserted_count += 1
             except Exception as exc:
                 log.warning("thread_extractor.store_error", error=str(exc), exc_type=type(exc).__name__)
         
@@ -392,3 +524,4 @@ def _store_threads(
                         error=str(exc),
                         exc_type=type(exc).__name__,
                     )
+    return inserted_count
