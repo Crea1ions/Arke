@@ -27,6 +27,14 @@ from arke.logging.action_writer import log_action
 log = structlog.get_logger()
 
 
+_MCP_FALLBACK_MIN_PYTHON = (3, 11)
+
+
+def _is_supported_python_for_mcp_fallback() -> bool:
+    """Return True when current interpreter is safe for MCP fallback use."""
+    return sys.version_info >= _MCP_FALLBACK_MIN_PYTHON
+
+
 def run(intention: str, context: dict[str, Any] | None = None) -> Task:
     """Plan and execute a Task for *intention*.
 
@@ -665,6 +673,11 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
                 def _resolve_command(raw: str) -> str:
                     # Keep command resolution independent from current workspace cwd.
                     if not raw:
+                        if not _is_supported_python_for_mcp_fallback():
+                            raise RuntimeError(
+                                "MCP fallback interpreter unsupported: "
+                                f"requires Python >= {_MCP_FALLBACK_MIN_PYTHON[0]}.{_MCP_FALLBACK_MIN_PYTHON[1]}"
+                            )
                         return sys.executable
 
                     cmd_path = Path(raw)
@@ -677,12 +690,22 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
                             return str(candidate)
                         # Python fallback for missing local venv binaries in external workspaces.
                         if cmd_path.name.startswith("python"):
+                            if not _is_supported_python_for_mcp_fallback():
+                                raise RuntimeError(
+                                    "MCP fallback interpreter unsupported: "
+                                    f"requires Python >= {_MCP_FALLBACK_MIN_PYTHON[0]}.{_MCP_FALLBACK_MIN_PYTHON[1]}"
+                                )
                             return sys.executable
 
                     found = shutil.which(raw)
                     if found:
                         return found
 
+                    if not _is_supported_python_for_mcp_fallback():
+                        raise RuntimeError(
+                            "MCP fallback interpreter unsupported: "
+                            f"requires Python >= {_MCP_FALLBACK_MIN_PYTHON[0]}.{_MCP_FALLBACK_MIN_PYTHON[1]}"
+                        )
                     return sys.executable
 
                 def _resolve_arg(raw: str) -> str:

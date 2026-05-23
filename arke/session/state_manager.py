@@ -1,7 +1,10 @@
 """Session state management with checkpoint-and-resume semantics (Phase 4)."""
 
+import fcntl
 import json
 import os
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -19,6 +22,7 @@ class SessionStateManager:
         """
         self.arke_root = arke_root
         self.state_path = arke_root / "state.json"
+        self.lock_path = arke_root / "state.lock"
         self.checkpoint_interval = 5
         self.messages_count = 0
         self.tools_used: set = set()
@@ -27,12 +31,24 @@ class SessionStateManager:
         if proposed_session_id:
             self.session_id = proposed_session_id
         else:
-            self.session_id = f"session_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            ts = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
+            self.session_id = f"session_{ts}_{uuid.uuid4().hex[:8]}"
         
         self.state = self._load_or_init()
         self.messages_count = int(self.state.get("messages_count", 0))
         # Persist normalized schema immediately so state.json is always complete.
         self.checkpoint()
+
+    @contextmanager
+    def _state_lock(self):
+        """Serialize state.json access across concurrent processes in the same workspace."""
+        self.arke_root.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _base_state(self) -> Dict[str, Any]:
         """Return base state schema for a fresh session."""
@@ -59,44 +75,45 @@ class SessionStateManager:
         """Load existing state or initialize new session."""
         base = self._base_state()
 
-        if self.state_path.exists():
-            try:
-                raw_state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        with self._state_lock():
+            if self.state_path.exists():
+                try:
+                    raw_state = json.loads(self.state_path.read_text(encoding="utf-8"))
 
-                # Bootstrap placeholder written by ensure_arke_workspace() is not a real session yet.
-                if raw_state.get("workspace_initialized") and not raw_state.get("session_id"):
-                    return base
+                    # Bootstrap placeholder written by ensure_arke_workspace() is not a real session yet.
+                    if raw_state.get("workspace_initialized") and not raw_state.get("session_id"):
+                        return base
 
-                state = dict(raw_state)
+                    state = dict(raw_state)
 
-                # Normalize missing keys from legacy/bootstrap state.
-                for key, value in base.items():
-                    state.setdefault(key, value)
+                    # Normalize missing keys from legacy/bootstrap state.
+                    for key, value in base.items():
+                        state.setdefault(key, value)
 
-                # Detect crash: prior session exists and was not closed cleanly.
-                if state.get("session_id") and not state.get("closed_at"):
-                    state["crashed"] = True
-                    state["resumed_from"] = state.get("session_id")
-                    # Reuse session_id if resuming from crash
-                    self.session_id = state.get("session_id", self.session_id)
-                    state["session_id"] = self.session_id
-                else:
-                    # Clean close: start fresh session
-                    state["session_id"] = self.session_id
-                    state["crashed"] = False
-                    state["resumed_from"] = None
-                    state["closed_at"] = None
-                    state["started_at"] = datetime.now(timezone.utc).isoformat()
-                
-                # Reset messages_count and tools for new run
-                state["messages_count"] = 0
-                state["tools_used"] = []
-                state["modes_used"] = ["ask"]
-                state["mode_current"] = "ask"
-                state["last_checkpoint_step"] = 0
-                return state
-            except (json.JSONDecodeError, OSError):
-                pass
+                    # Detect crash: prior session exists and was not closed cleanly.
+                    if state.get("session_id") and not state.get("closed_at"):
+                        state["crashed"] = True
+                        state["resumed_from"] = state.get("session_id")
+                        # Reuse session_id if resuming from crash
+                        self.session_id = state.get("session_id", self.session_id)
+                        state["session_id"] = self.session_id
+                    else:
+                        # Clean close: start fresh session
+                        state["session_id"] = self.session_id
+                        state["crashed"] = False
+                        state["resumed_from"] = None
+                        state["closed_at"] = None
+                        state["started_at"] = datetime.now(timezone.utc).isoformat()
+
+                    # Reset messages_count and tools for new run
+                    state["messages_count"] = 0
+                    state["tools_used"] = []
+                    state["modes_used"] = ["ask"]
+                    state["mode_current"] = "ask"
+                    state["last_checkpoint_step"] = 0
+                    return state
+                except (json.JSONDecodeError, OSError):
+                    pass
         
         # New session initialization
         return base
@@ -125,10 +142,11 @@ class SessionStateManager:
         """Save state atomically to temp file + replace."""
         tmp_path = self.state_path.with_suffix(".tmp")
         self.state["last_checkpoint_step"] = self.messages_count
-        
+
         try:
-            tmp_path.write_text(json.dumps(self.state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-            os.replace(tmp_path, self.state_path)
+            with self._state_lock():
+                tmp_path.write_text(json.dumps(self.state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                os.replace(tmp_path, self.state_path)
         except OSError:
             if tmp_path.exists():
                 try:

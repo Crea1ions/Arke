@@ -114,3 +114,27 @@ def test_exec_mcp_falls_back_to_current_python_if_binary_missing(monkeypatch):
     assert out["return_code"] == 0
     assert captured["cwd"] == str(arke_root)
     assert captured["cmd"][0] == sys.executable
+
+
+def test_exec_mcp_rejects_fallback_on_unsupported_python(monkeypatch):
+    monkeypatch.setattr(mcp_cache_mod, "McpCache", _NoCache)
+
+    def _fake_load(_fh):  # noqa: ARG001
+        return {
+            "mcp_servers": {
+                "web_search": {
+                    "enabled": True,
+                    "command": ".venv/bin/python-missing",
+                    "args": ["arke/interfaces/mcp_servers/web_search.py", "--stdio"],
+                    "timeout": 30,
+                }
+            }
+        }
+
+    monkeypatch.setattr("tomllib.load", _fake_load)
+    monkeypatch.setattr("arke.orchestrator._is_supported_python_for_mcp_fallback", lambda: False)
+
+    out = _exec_mcp(_step())
+
+    assert out["return_code"] == 1
+    assert "unsupported" in out["stderr"].lower()
