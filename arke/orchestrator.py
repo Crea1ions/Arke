@@ -9,6 +9,9 @@ LLM never sees workspace structure or paths.
 
 from __future__ import annotations
 
+import re
+import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -390,84 +393,190 @@ def _exec_sqlite(step: Step) -> dict[str, Any]:
         else:
             db_name = "global"
 
+    def _normalize_chat_history_query(sql: str) -> str:
+        # Compatibility for legacy/generated SQL using old aliases.
+        if "chat_history" not in sql.lower():
+            return sql
+        normalized = re.sub(r"\bmessage\b", "content", sql, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bdate\b(?!\s*\()", "date(timestamp)", normalized, flags=re.IGNORECASE)
+        return normalized
+
     mm = MemoryManager()
-    rows = mm.query(db_name, query, params)
-    stdout = "\n".join(str(dict(r)) for r in rows) if rows else "(aucun résultat)"
-    return {"return_code": 0, "rows": rows, "stdout": stdout, "stderr": ""}
+    try:
+        rows = mm.query(db_name, query, params)
+        stdout = "\n".join(str(dict(r)) for r in rows) if rows else "(aucun résultat)"
+        return {"return_code": 0, "rows": rows, "stdout": stdout, "stderr": ""}
+    except Exception as exc:  # noqa: BLE001
+        error_text = str(exc)
+
+        # One compatibility retry for common chat_history column mistakes.
+        retry_query = _normalize_chat_history_query(query)
+        should_retry = (
+            retry_query != query
+            and "chat_history" in query.lower()
+            and (
+                "no such column: message" in error_text.lower()
+                or "no such column: date" in error_text.lower()
+            )
+        )
+
+        if should_retry:
+            try:
+                rows = mm.query(db_name, retry_query, params)
+                stdout = "\n".join(str(dict(r)) for r in rows) if rows else "(aucun résultat)"
+                return {"return_code": 0, "rows": rows, "stdout": stdout, "stderr": ""}
+            except Exception as retry_exc:  # noqa: BLE001
+                return {
+                    "return_code": 1,
+                    "stdout": "",
+                    "stderr": f"SQLite query failed: {retry_exc}",
+                }
+
+        return {
+            "return_code": 1,
+            "stdout": "",
+            "stderr": f"SQLite query failed: {exc}",
+        }
 
 
 def _exec_memory_search(step: Step) -> dict[str, Any]:
-    """Search agent learnings from agent_learnings table.
-    
-    Args:
-        query: Search keywords (matched against intention_pattern and lesson)
-        limit: Number of results to return (default 5)
-        db: Database name (default "global")
-    
-    Returns:
-        Dict with matching learning records and formatted output.
+    """Search memory via existing SQL/FTS retrieval + S054 rerank.
+
+    Existing retrieval source is selected by db/source arguments (no routing
+    semantic change), then S054 reranks top-K candidates in agent-search flow.
     """
-    from difflib import SequenceMatcher
     import json
+    from difflib import SequenceMatcher
     from arke.memory.manager import MemoryManager
+    from arke.memory.retrieval_orchestrator import (
+        load_hybrid_search_config,
+        rerank_memory_candidates_hybrid,
+    )
 
     search_query = step.arguments.get("query", "").lower()
     limit = step.arguments.get("limit", 5)
     db = step.arguments.get("db", "global")
+    source = step.arguments.get("source", "auto")
 
     if not search_query:
         return {"return_code": 1, "stdout": "", "stderr": "query parameter required"}
 
     mm = MemoryManager()
-    
-    # Get all agent_learnings for fuzzy matching
+    cfg = load_hybrid_search_config()
+    candidate_k = max(1, cfg.candidate_k)
+
+    lexical_candidates: list[dict[str, Any]] = []
+
+    # Preserve existing retrieval routing semantics using db/source hints.
     try:
-        all_rows = mm.query(
-            db,
-            "SELECT id, intention_pattern, tool_sequence, success, lesson, created_at FROM agent_learnings ORDER BY created_at DESC",
-            []
-        )
+        if source in ("auto", "session_fts") and db == "session":
+            rows = mm.query(
+                "session",
+                """
+                SELECT c.id, c.role, c.content, c.timestamp, bm25(memory_fts) AS bm25_score
+                FROM memory_fts
+                JOIN chat_history c ON c.id = memory_fts.rowid
+                WHERE memory_fts MATCH ?
+                ORDER BY bm25(memory_fts)
+                LIMIT ?
+                """,
+                (search_query, candidate_k),
+            )
+            for r in rows:
+                d = dict(r)
+                lexical_candidates.append(
+                    {
+                        "id": d.get("id"),
+                        "role": d.get("role"),
+                        "timestamp": d.get("timestamp"),
+                        # bm25 lower is better, invert sign to keep higher-better convention.
+                        "lexical_score": -float(d.get("bm25_score", 0.0) or 0.0),
+                        "candidate_text": d.get("content", ""),
+                        "content": d.get("content", ""),
+                        "source": "session_fts",
+                    }
+                )
+
+        elif source in ("auto", "project_fts") and db == "project":
+            rows = mm.query(
+                "project",
+                """
+                SELECT d.id, d.path, d.topic, d.content, d.updated_at, bm25(docs_fts) AS bm25_score
+                FROM docs_fts
+                JOIN docs d ON d.id = docs_fts.rowid
+                WHERE docs_fts MATCH ?
+                ORDER BY bm25(docs_fts)
+                LIMIT ?
+                """,
+                (search_query, candidate_k),
+            )
+            for r in rows:
+                d = dict(r)
+                lexical_candidates.append(
+                    {
+                        "id": d.get("id"),
+                        "path": d.get("path"),
+                        "topic": d.get("topic"),
+                        "updated_at": d.get("updated_at"),
+                        "lexical_score": -float(d.get("bm25_score", 0.0) or 0.0),
+                        "candidate_text": d.get("content", ""),
+                        "content": d.get("content", ""),
+                        "source": "project_fts",
+                    }
+                )
+
+        else:
+            # Backward-compatible global lexical retrieval on agent_learnings.
+            rows = mm.query(
+                "global",
+                "SELECT id, intention_pattern, tool_sequence, success, lesson, created_at "
+                "FROM agent_learnings ORDER BY created_at DESC",
+                [],
+            )
+            q = search_query.lower()
+            matches: list[dict[str, Any]] = []
+            for row in rows:
+                row_dict = dict(row) if hasattr(row, "keys") else row
+                intent = (row_dict.get("intention_pattern") or "").lower()
+                lesson = (row_dict.get("lesson") or "").lower()
+                if q not in intent and q not in lesson:
+                    continue
+                intent_score = SequenceMatcher(None, q, intent).ratio()
+                lesson_score = SequenceMatcher(None, q, lesson).ratio()
+                lexical_score = max(intent_score, lesson_score)
+
+                item = dict(row_dict)
+                item["lexical_score"] = lexical_score
+                item["candidate_text"] = f"{row_dict.get('intention_pattern', '')}\n{row_dict.get('lesson', '')}"
+                item["source"] = "global_agent_learnings"
+                matches.append(item)
+
+            matches.sort(
+                key=lambda x: (x.get("success", True), x.get("lexical_score", 0.0), x.get("created_at", "")),
+                reverse=True,
+            )
+            lexical_candidates = matches[:candidate_k]
     except Exception:
-        all_rows = []
+        lexical_candidates = []
 
-    if not all_rows:
-        return {"return_code": 0, "stdout": "(no learning experiences found)", "stderr": ""}
-
-    # Fuzzy match + ranking
-    matches = []
-    for row in all_rows:
-        # Convert sqlite3.Row to dict for easier access
-        row_dict = dict(row) if hasattr(row, 'keys') else row
-        
-        intent = (row_dict.get("intention_pattern") or "").lower()
-        lesson = (row_dict.get("lesson") or "").lower()
-        
-        # Check if search query appears in intent or lesson
-        if search_query in intent or search_query in lesson:
-            # Calculate relevance score
-            intent_score = SequenceMatcher(None, search_query, intent).ratio()
-            lesson_score = SequenceMatcher(None, search_query, lesson).ratio()
-            relevance = max(intent_score, lesson_score)
-            
-            matches.append({
-                "row": row_dict,
-                "relevance": relevance,
-                "success": row_dict.get("success", True),
-            })
-
-    # Sort by: success first (1 before 0), then relevance highest first, then newest first
-    matches.sort(
-        key=lambda x: (x["success"], x["relevance"], x["row"].get("created_at", "")),
-        reverse=True  # Reverse all: success=1 before 0, higher relevance first, newer first
+    result = rerank_memory_candidates_hybrid(
+        search_query=search_query,
+        lexical_candidates=lexical_candidates,
+        limit=limit,
+        config=cfg,
     )
-    matches = matches[:limit]
 
-    if matches:
-        results = [m["row"] for m in matches]
-        formatted = json.dumps(results, indent=2, default=str)
-        return {"return_code": 0, "stdout": formatted, "stderr": ""}
-    else:
+    results = result.get("results", [])
+    if not results:
         return {"return_code": 0, "stdout": "(no matching experiences found)", "stderr": ""}
+
+    payload = {
+        "results": results,
+        "semantic_applied": bool(result.get("semantic_applied", False)),
+        "fallback_reason": result.get("fallback_reason"),
+    }
+    formatted = json.dumps(payload, indent=2, default=str)
+    return {"return_code": 0, "stdout": formatted, "stderr": ""}
 
 
 def _exec_mcp(step: Step) -> dict[str, Any]:
@@ -550,13 +659,54 @@ def _exec_mcp(step: Step) -> dict[str, Any]:
                     "params": {"name": tool_name, "arguments": args.get("tool_args", {})},
                     "id": 1
                 }
+
+                arke_root = Path(__file__).resolve().parent.parent
+
+                def _resolve_command(raw: str) -> str:
+                    # Keep command resolution independent from current workspace cwd.
+                    if not raw:
+                        return sys.executable
+
+                    cmd_path = Path(raw)
+                    if cmd_path.is_absolute():
+                        return str(cmd_path)
+
+                    if raw.startswith(".") or "/" in raw:
+                        candidate = (arke_root / cmd_path).resolve()
+                        if candidate.exists():
+                            return str(candidate)
+                        # Python fallback for missing local venv binaries in external workspaces.
+                        if cmd_path.name.startswith("python"):
+                            return sys.executable
+
+                    found = shutil.which(raw)
+                    if found:
+                        return found
+
+                    return sys.executable
+
+                def _resolve_arg(raw: str) -> str:
+                    arg_path = Path(raw)
+                    if arg_path.is_absolute():
+                        return str(arg_path)
+                    if raw.startswith(".") or "/" in raw:
+                        candidate = (arke_root / arg_path).resolve()
+                        if candidate.exists():
+                            return str(candidate)
+                    return raw
+
+                resolved_command = _resolve_command(str(cfg.get("command", "")))
+                resolved_args = [
+                    _resolve_arg(str(raw_arg)) for raw_arg in cfg.get("args", [])
+                ]
                 
                 proc = subprocess.run(
-                    [cfg["command"]] + cfg.get("args", []),
+                    [resolved_command] + resolved_args,
                     input=json.dumps(request),
                     capture_output=True,
                     text=True,
-                    timeout=cfg.get("timeout", 30)
+                    timeout=cfg.get("timeout", 30),
+                    cwd=str(arke_root),
                 )
                 
                 if proc.returncode != 0:

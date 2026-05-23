@@ -161,9 +161,11 @@ def plan(intention: str, context: dict[str, Any]) -> Task:
             args.setdefault("path", intention)
         elif tool == "sqlite":
             args.setdefault("query", intention)
+        elif tool == "memory_search":
+            args.setdefault("query", intention)
         # Note: tool="llm" is never returned by _ask_agent
         # (it's executed directly there, not passed to orchestrator)
-        if tool in ["cli", "fs", "sqlite", "mcp"]:
+        if tool in ["cli", "fs", "sqlite", "mcp", "memory_search"]:
             step = _single_step(tool, intention, context, args)
             return Task(id=_new_id(), description=intention, steps=[step])
 
@@ -317,6 +319,18 @@ def _single_step(tool: str, intention: str, context: dict[str, Any], args: dict[
             id="step_1",
             tool="mcp",
             arguments=args,
+            validation=Validation(type="return_code", expected=0),
+        )
+    if tool == "memory_search":
+        query = args.get("query", intention.strip())
+        return Step(
+            id="step_1",
+            tool="memory_search",
+            arguments={
+                "query": query,
+                "limit": args.get("limit", 5),
+                "db": args.get("db", "global"),
+            },
             validation=Validation(type="return_code", expected=0),
         )
     # llm fallback

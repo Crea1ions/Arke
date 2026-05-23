@@ -1427,7 +1427,11 @@ def _ask_agent(
         "3. **rss_reader** (Python) — Lecteur RSS/Atom\n"
         "   - Outils : read_rss, discover_rss, fetch_full_content\n\n"
         "4. **github** (Python) — API GitHub\n"
-        "   - Outils : github_repo, github_search, github_readme, github_user\n\n"
+        "   - Outils : github_repo, github_search, github_readme, github_user\n"
+        "   - Pour un profil/compte/utilisateur GitHub, utilise d'abord `github_user`.\n"
+        "   - Utilise `github_repo` seulement pour un depot precis (`owner/repo`) ou une URL complete de depot.\n"
+        "   - Pour resumer les depots publics d'un compte, commence par `github_user`, puis recupere les depots associes.\n"
+        "   - Portee actuelle : profil utilisateur, metadonnees depot, recherche de depots et README; pas de navigation complete dans l'arborescence du repo.\n\n"
         "5. **freeweb** (npx) — Recherche web multi-source (Yahoo, Bing, etc.)\n\n"
         "### Format d'appel MCP (2 formats supportés)\n"
         "**Format 1 : Recommandé (serveurs Python)**\n"
@@ -1454,6 +1458,7 @@ def _ask_agent(
         "**session.db** (conversationnel — utile pour memory_write/read/forget):\n"
         "- `session_context` (key TEXT, value TEXT) — TOUJOURS PASSER `\"db\": \"session\"`\n"
         "- `chat_history` — historique de conversation\n"
+        "  Colonnes `chat_history`: id, role, content, model_used, timestamp (pas de colonne message/date)\n"
         "- `memory_fts` — recherche FTS5 sur historique\n\n"
         "**global.db** (défaut si db non spécifié):\n"
         "- `config`, `tool_usage`, `skills`, `pattern_log`\n\n"
@@ -1590,7 +1595,7 @@ Ne combine pas les commandes CLI avec && ou |. Chaque étape = un outil indépen
                     log.error("llm.agent_execution_failed", error=str(exc))
                     return {"tool": None, "response": f"Erreur LLM: {str(exc)}"}
             
-            if tool in ["cli", "fs", "sqlite", "mcp"]:
+            if tool in ["cli", "fs", "sqlite", "mcp", "memory_search"]:
                 tools_sequence.append({"tool": tool, "args": args})
         
         # Remove all tags from response text to show only Markdown

@@ -41,6 +41,16 @@ enabled    = true
 model      = "gemini/text-embedding-004"
 dimensions = 768
 
+[memory_search_hybrid]
+enabled = true
+candidate_k = 20
+final_n = 5
+semantic_timeout_ms = 800
+lexical_weight = 0.7
+semantic_weight = 0.3
+query_cache_enabled = true
+query_cache_ttl_sec = 3600
+
 [telemetry]
 enabled       = true
 otlp_endpoint = ""
