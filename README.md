@@ -1,4 +1,4 @@
-# 🏛️ Arke
+# Arke
 
 > **Agent decides · System executes · Interaction persists**  
 > *"The system must never think in place of the agent."*
@@ -7,33 +7,7 @@ Arke is a **local-first autonomous agent architecture** where the LLM is the sol
 
 ---
 
-# 🎯 The Problem Arke Solves
-
-Most AI agent systems gradually converge toward hybrid cognition:
-- routers silently become decision layers
-- orchestration accumulates implicit heuristics
-- execution layers begin to interpret intent
-- the system starts “thinking” instead of strictly executing
-- agent autonomy becomes partially illusory
-
-Arke enforces a strict separation that most systems blur over time:
-
-| Layer     | Responsibility                         |
-|----------|----------------------------------------|
-| Agent     | Understands, reasons, decides          |
-| System    | Executes, validates, isolates, traces  |
-
-
-User → Agent (SOLE DECIDER) → System (EXECUTION ONLY)
-
-
-The system is infrastructure.
-The agent is cognition.
-Nothing in between.
-
----
-
-# 🧠 Cognitive Dimension
+# Cognitive Dimension
 
 Beyond execution, Arke introduces a structural property:
 **temporal continuity of interaction.**
@@ -55,9 +29,9 @@ Only memory accumulation over time.
 
 ---
 
-# ✅ Core Features
+# Core
 
-| Feature                        | Purpose                                                        |
+|                         | Purpose                                                        |
 | ------------------------------ | -------------------------------------------------------------- |
 | **Agent Modes**                | `/ask` `/search` `/plan` `/agent` — tool gating per mode       |
 | **Unified Endpoint**           | Single interface for CLI, filesystem, memory, APIs, MCP        |
@@ -74,7 +48,7 @@ Only memory accumulation over time.
 
 ---
 
-# 🧠 Cognitive Model
+# Cognitive Model
 
 Arke follows a strict layered reasoning model:
 
@@ -101,7 +75,7 @@ Only the agent decides.
 
 ---
 
-# 🏗️ Execution Pipeline
+# Execution Pipeline
 
 User Input
 
@@ -151,7 +125,7 @@ Memory Update (skills + history)
 
 ---
 
-# 🔐 Cognitive Invariants
+# Cognitive Invariants
 
 Arke enforces four core invariants:
 
@@ -172,7 +146,7 @@ This guarantees:
 
 ---
 
-# 🧠 Memory Architecture
+# Memory Architecture
 
 | Database     | Purpose                                 |
 | ------------ | --------------------------------------- |
@@ -189,7 +163,7 @@ Memory strategy:
 
 ---
 
-# 🧩 Skills System
+# Skills System
 
 Arke identifies repeated behavioral patterns and can abstract them into reusable workflows.
 
@@ -202,7 +176,7 @@ The agent remains the sole decision-maker for skill usage.
 
 ---
 
-# 🎛️ Agent Modes
+# Agent Modes
 
 Arke defaults to `/ask` mode — no tools, direct responses only.
 The user must explicitly switch modes to grant tool access.
@@ -251,7 +225,7 @@ Codex is preference/context memory. It does not override mode permissions or The
 
 ---
 
-# 🔭 Observability
+# Observability
 
 All executions are traced via OpenTelemetry:
 
@@ -267,7 +241,7 @@ It never participates in decision-making.
 
 ---
 
-# 🔧 Technical Stack
+# Technical Stack
 
 | Component  | Technology                       |
 | ---------- | -------------------------------- |
@@ -282,7 +256,7 @@ It never participates in decision-making.
 
 ---
 
-# 🚀 Status
+# Status
 
 * Version: v1.8.0
 * Tests: 533 / 533 passing
@@ -314,7 +288,7 @@ Arke remains fully operational as a standalone local-first agent without them.
 
 ---
 
-# 🚀 Quick Start
+# Quick Start
 
 ## Install
 
@@ -336,7 +310,7 @@ arke --telegram
 
 ---
 
-# 📚 Documentation
+# Documentation
 
 | Document                      | Purpose                        |
 | ----------------------------- | ------------------------------ |
@@ -347,7 +321,7 @@ arke --telegram
 
 ---
 
-# 🧪 Testing
+# Testing
 
 
 pytest tests/ -v
@@ -363,7 +337,7 @@ Covers:
 
 ---
 
-# 🤝 Contributing
+# Contributing
 
 Contributions are welcome if they preserve:
 
@@ -375,7 +349,7 @@ Contributions are welcome if they preserve:
 
 ---
 
-# 📜 License
+# License
 
 MIT License
 
